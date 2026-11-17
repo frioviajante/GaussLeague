@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+sympy
+psycopg[binary]
+python-dotenv
+passlib[bcrypt]
+bcrypt==4.0.1
+pyjwt
+pydantic
