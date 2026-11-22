@@ -129,18 +129,20 @@ def get_me(user_id: str = Depends(get_current_user_id), conn=Depends(get_db)):
         return user
 
 @app.get("/problems")
-def list_problems(conn=Depends(get_db)):
+def list_problems(source: str = "irodov", conn=Depends(get_db)):
     with conn.cursor() as cur:
         cur.execute(
             """
             SELECT id, irodov_code, title, category, difficulty_rating,
-                   statement_latex, svg_diagram, answer_type, unit, variables_hint
+                   statement_latex, svg_diagram, answer_type, unit, variables_hint, source
             FROM problems
+            WHERE source = %s
             ORDER BY
                 COALESCE(NULLIF(regexp_replace(split_part(irodov_code, '.', 1), '[^0-9]', '', 'g'), ''), '0')::int ASC,
                 COALESCE(NULLIF(regexp_replace(split_part(irodov_code, '.', 2), '[^0-9]', '', 'g'), ''), '0')::int ASC,
                 irodov_code ASC
-            """
+            """,
+            (source,),
         )
         return cur.fetchall()
 
