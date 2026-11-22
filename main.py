@@ -17,7 +17,7 @@ DATABASE_URL = os.environ.get("DATABASE_URL")
 JWT_SECRET = os.environ.get("JWT_SECRET", "irodov-arena-dev-secret-key")
 JWT_ALGORITHM = "HS256"
 
-app = FastAPI(title="IrodovArena Judge API")
+app = FastAPI(title="Gauss League Judge API")
 
 app.add_middleware(
     CORSMiddleware,
@@ -82,7 +82,7 @@ def check_answer(user_input: str, expected_answer: str, answer_type: str, tolera
 
 @app.get("/")
 def health_check():
-    return {"status": "online", "service": "IrodovArena SymPy Judge"}
+    return {"status": "online", "service": "Gauss League SymPy Judge"}
 
 @app.post("/auth/signup")
 def signup(req: SignupRequest, conn=Depends(get_db)):
@@ -134,7 +134,7 @@ def list_problems(source: str = "irodov", conn=Depends(get_db)):
         cur.execute(
             """
             SELECT id, irodov_code, title, category, difficulty_rating,
-                   statement_latex, svg_diagram, answer_type, unit, variables_hint, source
+                   statement_latex, svg_diagram, figure_url, answer_type, unit, variables_hint, source
             FROM problems
             WHERE source = %s
             ORDER BY
