@@ -39,6 +39,7 @@ interface Problem {
   difficulty_rating: number;
   statement_latex: string;
   svg_diagram?: string;
+  figure_url?: string | null;
   answer_type: 'numeric' | 'algebraic';
   unit?: string;
   variables_hint?: string;
@@ -102,7 +103,7 @@ function MathText({ content }: { content: string }) {
   );
 }
 
-export default function IrodovArenaPage() {
+export default function GaussLeaguePage() {
   const [token, setToken] = useState<string | null>(null);
   const [user, setUser] = useState<UserProfile | null>(null);
   const [authModalOpen, setAuthModalOpen] = useState(false);
@@ -542,6 +543,16 @@ export default function IrodovArenaPage() {
                       <MathText content={selectedProblem.statement_latex} />
                     </div>
 
+                    {selectedProblem.figure_url && (
+                      <div className="my-4 flex justify-center rounded-xl border border-slate-800/80 bg-[#0b0f19] p-4">
+                        <img
+                          src={selectedProblem.figure_url}
+                          alt={`Figura da questão ${selectedProblem.irodov_code}`}
+                          className="max-h-72 w-auto object-contain invert mix-blend-screen contrast-125"
+                        />
+                      </div>
+                    )}
+
                     {selectedProblem.svg_diagram && (
                       <div
                         className="p-4 rounded-lg bg-[#0b0f19] border border-slate-800 flex justify-center"
@@ -764,7 +775,7 @@ export default function IrodovArenaPage() {
           <div className="bg-[#111827] border border-slate-800 rounded-xl max-w-md w-full p-6 space-y-5">
             <div className="flex items-center justify-between">
               <h3 className="text-lg font-bold text-white">
-                {authMode === 'login' ? 'Entrar na IrodovArena' : 'Criar Conta de Competidor'}
+                {authMode === 'login' ? 'Entrar na Gauss League' : 'Criar Conta de Competidor'}
               </h3>
               <button
                 onClick={() => setAuthModalOpen(false)}
