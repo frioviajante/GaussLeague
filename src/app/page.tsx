@@ -338,8 +338,8 @@ export default function IrodovArenaPage() {
                 <Flame className="w-5 h-5" />
               </div>
               <div>
-                <span className="font-bold text-lg tracking-tight text-white">Irodov</span>
-                <span className="font-bold text-lg tracking-tight text-indigo-400">Arena</span>
+                <span className="font-bold text-lg tracking-tight text-white">Gauss</span>
+                <span className="font-bold text-lg tracking-tight text-indigo-400">League</span>
               </div>
             </div>
 
