@@ -20,6 +20,8 @@ import {
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
+type ProblemSource = 'irodov' | 'noic';
+
 interface UserProfile {
   id: string;
   username: string;
@@ -40,6 +42,7 @@ interface Problem {
   answer_type: 'numeric' | 'algebraic';
   unit?: string;
   variables_hint?: string;
+  source?: ProblemSource;
 }
 
 interface Submission {
@@ -58,6 +61,17 @@ function getRankInfo(rating: number) {
   if (rating < 2100) return { title: 'Candidate Master', color: 'text-purple-400', badge: 'bg-purple-500/20 text-purple-300 border-purple-500/30' };
   if (rating < 2400) return { title: 'Master', color: 'text-amber-400', badge: 'bg-amber-500/20 text-amber-300 border-amber-500/30' };
   return { title: 'Grandmaster', color: 'text-rose-500', badge: 'bg-rose-500/20 text-rose-400 border-rose-500/30' };
+}
+
+function compareProblemCodes(a: string, b: string): number {
+  const partsA = a.split('.').map((p) => parseInt(p.replace(/\D/g, ''), 10) || 0);
+  const partsB = b.split('.').map((p) => parseInt(p.replace(/\D/g, ''), 10) || 0);
+  const len = Math.max(partsA.length, partsB.length);
+  for (let i = 0; i < len; i++) {
+    const diff = (partsA[i] ?? 0) - (partsB[i] ?? 0);
+    if (diff !== 0) return diff;
+  }
+  return a.localeCompare(b);
 }
 
 function toPreviewLatex(expr: string): string {
@@ -100,6 +114,7 @@ export default function IrodovArenaPage() {
   const [authLoading, setAuthLoading] = useState(false);
 
   const [activeTab, setActiveTab] = useState<'problem' | 'editorial' | 'standings'>('problem');
+  const [selectedSource, setSelectedSource] = useState<ProblemSource>('irodov');
   const [problems, setProblems] = useState<Problem[]>([]);
   const [selectedProblem, setSelectedProblem] = useState<Problem | null>(null);
   const [editorialContent, setEditorialContent] = useState<string | null>(null);
@@ -119,9 +134,12 @@ export default function IrodovArenaPage() {
       fetchMe(savedToken);
       fetchUserSubmissions(savedToken);
     }
-    fetchProblems();
     fetchLeaderboard();
   }, []);
+
+  useEffect(() => {
+    fetchProblems(selectedSource, true);
+  }, [selectedSource]);
 
   async function fetchMe(authToken: string) {
     try {
@@ -137,14 +155,20 @@ export default function IrodovArenaPage() {
     } catch {}
   }
 
-  async function fetchProblems() {
+  async function fetchProblems(source: ProblemSource = selectedSource, resetSelection = false) {
     setLoadingData(true);
     try {
-      const res = await fetch(`${API_URL}/problems`);
+      const res = await fetch(`${API_URL}/problems?source=${source}`);
       if (res.ok) {
-        const data = await res.json();
+        const rawData: Problem[] = await res.json();
+        const data = [...rawData].sort((a, b) => compareProblemCodes(a.irodov_code, b.irodov_code));
         setProblems(data);
-        if (data.length > 0 && !selectedProblem) {
+        if (resetSelection) {
+          setSelectedProblem(data.length > 0 ? data[0] : null);
+          setLastFeedback(null);
+          setAnswerInput('');
+          if (activeTab === 'editorial') setActiveTab('problem');
+        } else if (data.length > 0 && !selectedProblem) {
           setSelectedProblem(data[0]);
         }
       }
@@ -288,7 +312,7 @@ export default function IrodovArenaPage() {
         ratingDelta: delta,
       });
 
-      await Promise.all([fetchUserSubmissions(token), fetchProblems(), fetchLeaderboard()]);
+      await Promise.all([fetchUserSubmissions(token), fetchProblems(selectedSource, false), fetchLeaderboard()]);
       if (isAC) setAnswerInput('');
     } catch (err: any) {
       setLastFeedback({ verdict: 'WA', message: err.message });
@@ -302,6 +326,7 @@ export default function IrodovArenaPage() {
   }, [submissions]);
 
   const rank = getRankInfo(user?.rating ?? 1200);
+  const sourceLabel = selectedSource === 'noic' ? 'NOIC' : 'Irodov';
 
   return (
     <div className="min-h-screen bg-[#0b0f19] text-slate-100 font-sans">
@@ -433,17 +458,25 @@ export default function IrodovArenaPage() {
             <div className="lg:col-span-8 space-y-6">
               {loadingData ? (
                 <div className="bg-[#111827] border border-slate-800 rounded-xl p-12 text-center text-slate-400">
-                  Conectando à API e carregando acervo do Irodov...
+                  Conectando à API e carregando acervo {sourceLabel}...
                 </div>
               ) : !selectedProblem ? (
                 <div className="bg-[#111827] border border-slate-800 rounded-xl p-12 text-center text-slate-400">
-                  Nenhuma questão encontrada. Execute o arquivo <code className="text-indigo-400">database/schema_neon.sql</code> no SQL Editor do Neon.
+                  {selectedSource === 'noic' ? (
+                    <>
+                      Nenhuma questão encontrada no acervo <strong className="text-indigo-400">NOIC</strong>. Rode o script <code className="text-indigo-400">seed_noic.py</code> para popular este banco.
+                    </>
+                  ) : (
+                    <>
+                      Nenhuma questão encontrada. Execute o arquivo <code className="text-indigo-400">database/schema_neon.sql</code> no SQL Editor do Neon.
+                    </>
+                  )}
                 </div>
               ) : activeTab === 'editorial' ? (
                 <div className="bg-[#111827] border border-slate-800 rounded-xl p-6 space-y-4">
                   <div className="flex items-center justify-between border-b border-slate-800 pb-4">
                     <div>
-                      <span className="text-xs font-mono text-indigo-400">Editorial Oficial</span>
+                      <span className="text-xs font-mono text-indigo-400">Editorial Oficial ({sourceLabel})</span>
                       <h2 className="text-xl font-bold text-white">
                         {selectedProblem.irodov_code} — {selectedProblem.title}
                       </h2>
@@ -478,8 +511,14 @@ export default function IrodovArenaPage() {
                     <div className="flex flex-wrap items-start justify-between gap-4 border-b border-slate-800 pb-4">
                       <div>
                         <div className="flex items-center gap-2 text-xs font-mono text-slate-400 mb-1">
-                          <span className="px-2 py-0.5 rounded bg-slate-800 text-indigo-300">
-                            Irodov {selectedProblem.irodov_code}
+                          <span
+                            className={`px-2 py-0.5 rounded ${
+                              selectedSource === 'noic'
+                                ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30'
+                                : 'bg-slate-800 text-indigo-300'
+                            }`}
+                          >
+                            {sourceLabel} {selectedProblem.irodov_code}
                           </span>
                           <span>•</span>
                           <span>{selectedProblem.category}</span>
@@ -603,10 +642,35 @@ export default function IrodovArenaPage() {
 
             <div className="lg:col-span-4 space-y-6">
               <div className="bg-[#111827] border border-slate-800 rounded-xl overflow-hidden">
+                <div className="p-2 bg-slate-900/80 border-b border-slate-800 grid grid-cols-2 gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setSelectedSource('irodov')}
+                    className={`py-1.5 px-3 rounded-lg text-xs font-semibold transition ${
+                      selectedSource === 'irodov'
+                        ? 'bg-indigo-600 text-white shadow'
+                        : 'text-slate-400 hover:text-white hover:bg-slate-800'
+                    }`}
+                  >
+                    Acervo Irodov
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedSource('noic')}
+                    className={`py-1.5 px-3 rounded-lg text-xs font-semibold transition ${
+                      selectedSource === 'noic'
+                        ? 'bg-emerald-600 text-white shadow'
+                        : 'text-slate-400 hover:text-white hover:bg-slate-800'
+                    }`}
+                  >
+                    Acervo NOIC
+                  </button>
+                </div>
+
                 <div className="px-4 py-3 border-b border-slate-800 flex items-center justify-between">
                   <span className="text-sm font-bold text-white flex items-center gap-2">
-                    <BarChart3 className="w-4 h-4 text-indigo-400" />
-                    Acervo Irodov
+                    <BarChart3 className={`w-4 h-4 ${selectedSource === 'noic' ? 'text-emerald-400' : 'text-indigo-400'}`} />
+                    Acervo {sourceLabel}
                   </span>
                   <span className="text-xs text-slate-400">{problems.length} questões</span>
                 </div>
@@ -623,7 +687,11 @@ export default function IrodovArenaPage() {
                           setLastFeedback(null);
                         }}
                         className={`w-full px-4 py-3 text-left flex items-center justify-between transition ${
-                          isSelected ? 'bg-indigo-600/15' : 'hover:bg-slate-800/40'
+                          isSelected
+                            ? selectedSource === 'noic'
+                              ? 'bg-emerald-600/15'
+                              : 'bg-indigo-600/15'
+                            : 'hover:bg-slate-800/40'
                         }`}
                       >
                         <div className="flex items-center gap-2.5 min-w-0">
@@ -633,7 +701,13 @@ export default function IrodovArenaPage() {
                             <div className="w-4 h-4 rounded-full border border-slate-600 shrink-0" />
                           )}
                           <div className="truncate">
-                            <div className="text-xs font-mono text-indigo-400">{prob.irodov_code}</div>
+                            <div
+                              className={`text-xs font-mono ${
+                                selectedSource === 'noic' ? 'text-emerald-400' : 'text-indigo-400'
+                              }`}
+                            >
+                              {prob.irodov_code}
+                            </div>
                             <div className="text-sm font-medium text-slate-200 truncate">{prob.title}</div>
                           </div>
                         </div>
