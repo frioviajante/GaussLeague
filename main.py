@@ -136,7 +136,10 @@ def list_problems(conn=Depends(get_db)):
             SELECT id, irodov_code, title, category, difficulty_rating,
                    statement_latex, svg_diagram, answer_type, unit, variables_hint
             FROM problems
-            ORDER BY irodov_code ASC
+            ORDER BY
+                COALESCE(NULLIF(regexp_replace(split_part(irodov_code, '.', 1), '[^0-9]', '', 'g'), ''), '0')::int ASC,
+                COALESCE(NULLIF(regexp_replace(split_part(irodov_code, '.', 2), '[^0-9]', '', 'g'), ''), '0')::int ASC,
+                irodov_code ASC
             """
         )
         return cur.fetchall()
