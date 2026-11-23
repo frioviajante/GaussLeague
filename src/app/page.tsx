@@ -88,6 +88,7 @@ interface Problem {
   irodov_code: string;
   title: string;
   category: string;
+  raw_category?: string;
   difficulty_rating: number;
   statement_latex: string;
   svg_diagram?: string;
@@ -106,6 +107,15 @@ interface Submission {
   verdict: 'AC' | 'WA' | 'PE';
   created_at: string;
 }
+
+const RATING_PRESETS = [
+  { label: 'Qualquer', min: '', max: '' },
+  { label: '≤ 1400', min: '', max: '1400' },
+  { label: '1400–1700', min: '1400', max: '1700' },
+  { label: '1700–2000', min: '1700', max: '2000' },
+  { label: '2000–2400', min: '2000', max: '2400' },
+  { label: '2400+', min: '2400', max: '' },
+];
 
 const OLYMPIAD_CATALOG = [
   {
@@ -287,7 +297,6 @@ function RatingChart({ history, currentRating }: { history: RatingPoint[]; curre
 
       <div className="w-full overflow-x-auto">
         <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-auto min-w-[520px] select-none">
-          {/* Faixas de cor das patentes */}
           {RANK_BANDS.map((band) => {
             const topVal = Math.min(band.max, maxY);
             const botVal = Math.max(band.min, minY);
@@ -306,7 +315,6 @@ function RatingChart({ history, currentRating }: { history: RatingPoint[]; curre
             );
           })}
 
-          {/* Linhas de grade de patentes */}
           {thresholds.map((t) => {
             const y = toY(t);
             return (
@@ -327,7 +335,6 @@ function RatingChart({ history, currentRating }: { history: RatingPoint[]; curre
             );
           })}
 
-          {/* Rótulos do eixo X */}
           {points.map((p, idx) => {
             const step = Math.max(1, Math.ceil(points.length / 6));
             if (idx % step !== 0 && idx !== points.length - 1) return null;
@@ -346,7 +353,6 @@ function RatingChart({ history, currentRating }: { history: RatingPoint[]; curre
             );
           })}
 
-          {/* Linha de evolução */}
           {points.length > 1 && (
             <polyline
               fill="none"
@@ -358,7 +364,6 @@ function RatingChart({ history, currentRating }: { history: RatingPoint[]; curre
             />
           )}
 
-          {/* Pontos clicáveis/hover */}
           {points.map((p, idx) => {
             const cx = toX(idx);
             const cy = toY(p.new_rating);
@@ -409,13 +414,16 @@ export default function GaussLeaguePage() {
   const [leaderboard, setLeaderboard] = useState<UserProfile[]>([]);
   const [loadingData, setLoadingData] = useState(true);
 
-  // Estados da aba Tags / Problemset
+  // Estados da aba Tags & Rating
   const [categories, setCategories] = useState<CategoryStat[]>([]);
   const [tagProblems, setTagProblems] = useState<Problem[]>([]);
   const [loadingTags, setLoadingTags] = useState(false);
   const [activeTag, setActiveTag] = useState<string>('all');
   const [tagSourceFilter, setTagSourceFilter] = useState<string>('all');
   const [tagSearch, setTagSearch] = useState('');
+  const [minRatingInput, setMinRatingInput] = useState('');
+  const [maxRatingInput, setMaxRatingInput] = useState('');
+  const [tagSort, setTagSort] = useState<'rating_asc' | 'rating_desc' | 'code'>('rating_asc');
   const [tagStatusFilter, setTagStatusFilter] = useState<'all' | 'solved' | 'unsolved'>('all');
 
   // Estados da aba Perfil Público
@@ -461,9 +469,16 @@ export default function GaussLeaguePage() {
 
   useEffect(() => {
     if (activeTab === 'tags') {
-      fetchFilteredProblemset(activeTag, tagSourceFilter, tagSearch);
+      fetchFilteredProblemset({
+        category: activeTag,
+        source: tagSourceFilter,
+        search: tagSearch,
+        minRating: minRatingInput,
+        maxRating: maxRatingInput,
+        sort: tagSort,
+      });
     }
-  }, [activeTab, activeTag, tagSourceFilter]);
+  }, [activeTab, activeTag, tagSourceFilter, tagSort]);
 
   useEffect(() => {
     if (!timerRunning || timeLeftSeconds <= 0) return;
@@ -524,13 +539,27 @@ export default function GaussLeaguePage() {
     } catch {}
   }
 
-  async function fetchFilteredProblemset(cat: string, src: string, q: string) {
+  async function fetchFilteredProblemset(opts: {
+    category: string;
+    source: string;
+    search: string;
+    minRating: string;
+    maxRating: string;
+    sort: string;
+  }) {
     setLoadingTags(true);
     try {
       const params = new URLSearchParams();
-      if (cat && cat !== 'all') params.set('category', cat);
-      if (src && src !== 'all') params.set('source', src);
-      if (q.trim()) params.set('search', q.trim());
+      if (opts.category && opts.category !== 'all') params.set('category', opts.category);
+      if (opts.source && opts.source !== 'all') params.set('source', opts.source);
+      if (opts.search.trim()) params.set('search', opts.search.trim());
+      if (opts.minRating.trim() && !Number.isNaN(Number(opts.minRating))) {
+        params.set('min_rating', String(Math.floor(Number(opts.minRating))));
+      }
+      if (opts.maxRating.trim() && !Number.isNaN(Number(opts.maxRating))) {
+        params.set('max_rating', String(Math.floor(Number(opts.maxRating))));
+      }
+      if (opts.sort) params.set('sort', opts.sort);
 
       const res = await fetch(`${API_URL}/problemset?${params.toString()}`);
       if (res.ok) {
@@ -541,6 +570,37 @@ export default function GaussLeaguePage() {
     } finally {
       setLoadingTags(false);
     }
+  }
+
+  function applyRatingPreset(min: string, max: string) {
+    setMinRatingInput(min);
+    setMaxRatingInput(max);
+    fetchFilteredProblemset({
+      category: activeTag,
+      source: tagSourceFilter,
+      search: tagSearch,
+      minRating: min,
+      maxRating: max,
+      sort: tagSort,
+    });
+  }
+
+  function resetAllTagFilters() {
+    setActiveTag('all');
+    setTagSourceFilter('all');
+    setTagSearch('');
+    setMinRatingInput('');
+    setMaxRatingInput('');
+    setTagSort('rating_asc');
+    setTagStatusFilter('all');
+    fetchFilteredProblemset({
+      category: 'all',
+      source: 'all',
+      search: '',
+      minRating: '',
+      maxRating: '',
+      sort: 'rating_asc',
+    });
   }
 
   async function openUserProfile(targetUsername: string) {
@@ -847,7 +907,7 @@ export default function GaussLeaguePage() {
                   activeTab === 'tags' ? 'bg-indigo-600/20 text-indigo-300' : 'text-slate-400 hover:text-white'
                 }`}
               >
-                <Tag className="w-3.5 h-3.5" /> Tags
+                <Tag className="w-3.5 h-3.5" /> Tags & Rating
               </button>
               <button
                 onClick={openEditorialTab}
@@ -935,37 +995,111 @@ export default function GaussLeaguePage() {
                 <div>
                   <h2 className="text-xl font-bold text-white flex items-center gap-2">
                     <Tag className="w-5 h-5 text-indigo-400" />
-                    Filtrar Questões por Tag
+                    Filtrar Questões por Tag e Rating
                   </h2>
                   <p className="text-sm text-slate-400 mt-1">
-                    Treine tópicos específicos de física combinando questões do Irodov, NOIC e Olimpíadas.
+                    Filtre por grande área de física, faixa de dificuldade (PhysElo) e acervo.
                   </p>
                 </div>
 
-                <form
-                  onSubmit={(e) => {
-                    e.preventDefault();
-                    fetchFilteredProblemset(activeTag, tagSourceFilter, tagSearch);
-                  }}
-                  className="flex items-center gap-2 w-full sm:w-auto"
+                <button
+                  type="button"
+                  onClick={resetAllTagFilters}
+                  className="text-xs text-slate-400 hover:text-white px-3 py-1.5 rounded-lg bg-slate-800/80 border border-slate-700 transition"
                 >
-                  <div className="relative flex-1 sm:w-64">
-                    <Search className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
-                    <input
-                      type="text"
-                      value={tagSearch}
-                      onChange={(e) => setTagSearch(e.target.value)}
-                      placeholder="Buscar título ou código..."
-                      className="w-full pl-9 pr-3 py-2 rounded-lg bg-[#0b0f19] border border-slate-700 text-xs text-white focus:border-indigo-500 focus:outline-none"
-                    />
-                  </div>
+                  Limpar filtros
+                </button>
+              </div>
+
+              {/* Busca por texto + Faixa de Rating */}
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  fetchFilteredProblemset({
+                    category: activeTag,
+                    source: tagSourceFilter,
+                    search: tagSearch,
+                    minRating: minRatingInput,
+                    maxRating: maxRatingInput,
+                    sort: tagSort,
+                  });
+                }}
+                className="grid grid-cols-1 md:grid-cols-12 gap-3"
+              >
+                <div className="relative md:col-span-5">
+                  <Search className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    value={tagSearch}
+                    onChange={(e) => setTagSearch(e.target.value)}
+                    placeholder="Buscar título, código ou subtópico (ex: cinemática)..."
+                    className="w-full pl-9 pr-3 py-2 rounded-lg bg-[#0b0f19] border border-slate-700 text-xs text-white focus:border-indigo-500 focus:outline-none"
+                  />
+                </div>
+
+                <div className="md:col-span-4 flex items-center gap-2">
+                  <input
+                    type="number"
+                    min={0}
+                    max={4000}
+                    step={50}
+                    value={minRatingInput}
+                    onChange={(e) => setMinRatingInput(e.target.value)}
+                    placeholder="Rating mín."
+                    className="w-full px-3 py-2 rounded-lg bg-[#0b0f19] border border-slate-700 text-xs font-mono text-white focus:border-indigo-500 focus:outline-none"
+                  />
+                  <span className="text-slate-500 text-xs">—</span>
+                  <input
+                    type="number"
+                    min={0}
+                    max={4000}
+                    step={50}
+                    value={maxRatingInput}
+                    onChange={(e) => setMaxRatingInput(e.target.value)}
+                    placeholder="Rating máx."
+                    className="w-full px-3 py-2 rounded-lg bg-[#0b0f19] border border-slate-700 text-xs font-mono text-white focus:border-indigo-500 focus:outline-none"
+                  />
+                </div>
+
+                <div className="md:col-span-3 flex items-center gap-2">
+                  <select
+                    value={tagSort}
+                    onChange={(e) => setTagSort(e.target.value as 'rating_asc' | 'rating_desc' | 'code')}
+                    className="flex-1 px-2.5 py-2 rounded-lg bg-[#0b0f19] border border-slate-700 text-xs text-slate-200 focus:border-indigo-500 focus:outline-none"
+                  >
+                    <option value="rating_asc">Rating ↑</option>
+                    <option value="rating_desc">Rating ↓</option>
+                    <option value="code">Código</option>
+                  </select>
                   <button
                     type="submit"
-                    className="px-3.5 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-xs font-semibold text-white transition"
+                    className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-xs font-semibold text-white transition shrink-0"
                   >
-                    Buscar
+                    Filtrar
                   </button>
-                </form>
+                </div>
+              </form>
+
+              {/* Atalhos rápidos de faixa de Rating */}
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="text-xs text-slate-500 mr-1">Faixa de rating:</span>
+                {RATING_PRESETS.map((preset) => {
+                  const isActive = minRatingInput === preset.min && maxRatingInput === preset.max;
+                  return (
+                    <button
+                      key={preset.label}
+                      type="button"
+                      onClick={() => applyRatingPreset(preset.min, preset.max)}
+                      className={`px-2.5 py-1 rounded-md text-xs font-mono transition border ${
+                        isActive
+                          ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+                          : 'bg-[#0b0f19] text-slate-400 border-slate-800 hover:border-slate-600 hover:text-white'
+                      }`}
+                    >
+                      {preset.label}
+                    </button>
+                  );
+                })}
               </div>
 
               {/* Filtros de Fonte e Status */}
@@ -1014,7 +1148,7 @@ export default function GaussLeaguePage() {
                 </div>
               </div>
 
-              {/* Pills de Tags / Categorias */}
+              {/* Pills de Tags Unificadas */}
               <div className="flex flex-wrap gap-2">
                 <button
                   type="button"
@@ -1025,7 +1159,7 @@ export default function GaussLeaguePage() {
                       : 'bg-[#0b0f19] text-slate-400 border-slate-800 hover:border-slate-600 hover:text-white'
                   }`}
                 >
-                  Todas as tags
+                  Todas as áreas
                 </button>
                 {categories.map((cat) => (
                   <button
@@ -1056,10 +1190,28 @@ export default function GaussLeaguePage() {
                       em <strong className="text-indigo-400">{activeTag}</strong>
                     </>
                   )}
+                  {(minRatingInput || maxRatingInput) && (
+                    <>
+                      {' '}
+                      • Rating{' '}
+                      <strong className="text-amber-400 font-mono">
+                        {minRatingInput || '0'}–{maxRatingInput || '∞'}
+                      </strong>
+                    </>
+                  )}
                 </span>
                 <button
                   type="button"
-                  onClick={() => fetchFilteredProblemset(activeTag, tagSourceFilter, tagSearch)}
+                  onClick={() =>
+                    fetchFilteredProblemset({
+                      category: activeTag,
+                      source: tagSourceFilter,
+                      search: tagSearch,
+                      minRating: minRatingInput,
+                      maxRating: maxRatingInput,
+                      sort: tagSort,
+                    })
+                  }
                   className="hover:text-white flex items-center gap-1"
                 >
                   <RefreshCw className={`w-3.5 h-3.5 ${loadingTags ? 'animate-spin' : ''}`} /> Atualizar
@@ -1080,7 +1232,7 @@ export default function GaussLeaguePage() {
                         <th className="py-3 px-4 w-10"></th>
                         <th className="py-3 px-4">Código</th>
                         <th className="py-3 px-4">Título</th>
-                        <th className="py-3 px-4">Tag</th>
+                        <th className="py-3 px-4">Área</th>
                         <th className="py-3 px-4">Fonte</th>
                         <th className="py-3 px-4 text-right">Rating</th>
                       </tr>
@@ -1088,6 +1240,10 @@ export default function GaussLeaguePage() {
                     <tbody className="divide-y divide-slate-800/70 text-sm">
                       {visibleTagProblems.map((prob) => {
                         const isSolved = solvedProblemIds.has(prob.id);
+                        const showSub =
+                          prob.raw_category &&
+                          prob.raw_category.trim().toLowerCase() !== prob.category.trim().toLowerCase();
+
                         return (
                           <tr
                             key={prob.id}
@@ -1105,10 +1261,13 @@ export default function GaussLeaguePage() {
                               {prob.irodov_code}
                             </td>
                             <td className="py-3 px-4 font-medium text-slate-200">{prob.title}</td>
-                            <td className="py-3 px-4">
-                              <span className="px-2 py-0.5 rounded-full text-xs bg-slate-800 text-slate-300 border border-slate-700 whitespace-nowrap">
+                            <td className="py-3 px-4 whitespace-nowrap">
+                              <span className="px-2 py-0.5 rounded-full text-xs bg-slate-800 text-slate-200 border border-slate-700">
                                 {prob.category}
                               </span>
+                              {showSub && (
+                                <span className="ml-2 text-[11px] text-slate-500">{prob.raw_category}</span>
+                              )}
                             </td>
                             <td className="py-3 px-4">
                               <span
@@ -1124,10 +1283,9 @@ export default function GaussLeaguePage() {
                               </span>
                             </td>
                             <td className="py-3 px-4 text-right font-mono text-xs whitespace-nowrap">
-                              {prob.olympiad_id ? (
-                                <span className="text-slate-400">Unrated</span>
-                              ) : (
-                                <span className="text-amber-400 font-semibold">*{prob.difficulty_rating}</span>
+                              <span className="text-amber-400 font-semibold">*{prob.difficulty_rating}</span>
+                              {prob.olympiad_id && (
+                                <span className="ml-1.5 text-[10px] text-slate-500">(Unrated)</span>
                               )}
                             </td>
                           </tr>
@@ -1141,7 +1299,6 @@ export default function GaussLeaguePage() {
           </div>
         ) : activeTab === 'profile' ? (
           <div className="space-y-6">
-            {/* Barra de busca de qualquer perfil */}
             <div className="bg-[#111827] border border-slate-800 rounded-xl p-4 flex flex-wrap items-center justify-between gap-3">
               <button
                 type="button"
@@ -1194,7 +1351,6 @@ export default function GaussLeaguePage() {
 
                 return (
                   <div className="space-y-6">
-                    {/* Cabeçalho do Perfil */}
                     <div className="bg-[#111827] border border-slate-800 rounded-xl p-6 flex flex-wrap items-center justify-between gap-6">
                       <div className="flex items-center gap-4">
                         <div className="w-14 h-14 rounded-xl bg-slate-800 border border-slate-700 flex items-center justify-center">
@@ -1232,7 +1388,6 @@ export default function GaussLeaguePage() {
                       </div>
                     </div>
 
-                    {/* Gráfico de Evolução de Rating */}
                     <div className="bg-[#111827] border border-slate-800 rounded-xl p-6 space-y-4">
                       <div className="flex items-center justify-between">
                         <h3 className="font-bold text-white flex items-center gap-2">
@@ -1247,12 +1402,11 @@ export default function GaussLeaguePage() {
                       <RatingChart history={profileData.rating_history} currentRating={pUser.rating} />
                     </div>
 
-                    {/* Grid inferior: Tags resolvidas + Submissões recentes */}
                     <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
                       <div className="lg:col-span-5 bg-[#111827] border border-slate-800 rounded-xl p-6 space-y-4">
                         <h3 className="font-bold text-white flex items-center gap-2 text-sm">
                           <Tag className="w-4 h-4 text-indigo-400" />
-                          Domínio por Tag (Questões AC)
+                          Domínio por Área (Questões AC)
                         </h3>
 
                         {profileData.category_stats.length === 0 ? (
@@ -1653,9 +1807,14 @@ export default function GaussLeaguePage() {
                                 setActiveTab('tags');
                               }}
                               className="hover:text-indigo-400 transition"
-                              title="Filtrar mais questões desta tag"
+                              title="Filtrar mais questões desta área"
                             >
                               {selectedProblem.category}
+                              {selectedProblem.raw_category &&
+                                selectedProblem.raw_category.trim().toLowerCase() !==
+                                  selectedProblem.category.trim().toLowerCase() && (
+                                  <span className="text-slate-500"> · {selectedProblem.raw_category}</span>
+                                )}
                             </button>
                           </div>
                           <h1 className="text-2xl font-bold text-white">{selectedProblem.title}</h1>
@@ -1669,7 +1828,10 @@ export default function GaussLeaguePage() {
                           )}
                           <span className="px-3 py-1 rounded-md bg-slate-800 text-xs font-mono text-slate-300 border border-slate-700">
                             {currentProblemIsUnrated ? (
-                              <strong className="text-amber-400">Unrated</strong>
+                              <>
+                                <strong className="text-amber-400">*{selectedProblem.difficulty_rating}</strong>{' '}
+                                <span className="text-slate-400">(Unrated)</span>
+                              </>
                             ) : (
                               <>
                                 Rating: <strong className="text-amber-400">*{selectedProblem.difficulty_rating}</strong>
