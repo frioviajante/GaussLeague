@@ -46,6 +46,28 @@ app.add_middleware(
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
+def normalized_category_sql(col: str = "category") -> str:
+    """Agrupa subtags em áreas principais usando regex POSIX com fronteira de palavra."""
+    c = f"COALESCE(TRIM({col}), '')"
+    return rf"""
+        CASE
+            WHEN {c} ~* '\m(qu[âa]nt|relativ|nucle|at[ôo]m|part[íi]cul|modern|f[óo]ton|photon|semicondut|estado s[óo]lido|solid state|raios[- ]?x|x[- ]?ray)'
+                THEN 'Física Moderna'
+            WHEN {c} ~* '\m(termo|thermo|calor|heat|t[ée]rmic|entrop|g[áa]s|gases|estat[íi]st|statist|teoria cin[ée]t|kinetic theory|dilata[çc])'
+                THEN 'Termodinâmica'
+            WHEN {c} ~* '\m(eletr|electr|magnet|circuit|indu[çc]|capacit|maxwell|corrente|resist[êe]nc|diel[ée]tr|amp[èe]re|faraday)'
+                THEN 'Eletromagnetismo'
+            WHEN {c} ~* '\m([óo]pt|lente|lens|espelho|mirror|difra|interfer|refra|reflex|luz\M|light|polariz|laser|fenda)'
+                THEN 'Óptica'
+            WHEN {c} ~* '\m(ond|wave|oscil|ac[úu]st|acoust|som\M|sound|mhs\M|shm\M|harm[ôo]n|resson|reson|p[êe]ndul|vibr|doppler)'
+                THEN 'Ondulatória'
+            WHEN {c} ~* '\m(mec[âa]n|mech|cinem|kinem|din[âa]m|dynam|est[áa]t|stat|gravit|fluid|hidro|hydro|colis|rota[çc]|r[íi]gid|rigid|energ|trabalh|moment|el[áa]st|for[çc]a|newton|lagrang|hamilton|atrit|cin[ée]t|bal[íi]st|aerodin|lan[çc]ament|impuls|in[ée]rc)'
+                THEN 'Mecânica'
+            ELSE 'Física Geral'
+        END
+    """
+
+
 def get_db():
     if not DATABASE_URL:
         raise HTTPException(status_code=500, detail="DATABASE_URL não configurada no servidor.")
@@ -179,6 +201,7 @@ def get_me(user_id: str = Depends(get_current_user_id), conn=Depends(get_db)):
 
 @app.get("/users/{username}")
 def get_user_profile(username: str, conn=Depends(get_db)):
+    cat_expr = normalized_category_sql("p.category")
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -206,8 +229,8 @@ def get_user_profile(username: str, conn=Depends(get_db)):
         history = cur.fetchall()
 
         cur.execute(
-            """
-            SELECT COALESCE(NULLIF(TRIM(p.category), ''), 'Física Geral') AS category,
+            f"""
+            SELECT {cat_expr} AS category,
                    COUNT(DISTINCT p.id) AS count
             FROM submissions s
             JOIN problems p ON p.id = s.problem_id
@@ -220,10 +243,10 @@ def get_user_profile(username: str, conn=Depends(get_db)):
         category_stats = cur.fetchall()
 
         cur.execute(
-            """
+            f"""
             SELECT s.id, s.problem_id, s.verdict, s.created_at,
                    p.irodov_code AS problem_code, p.title AS problem_title,
-                   p.category, p.difficulty_rating, p.source, p.olympiad_id
+                   {cat_expr} AS category, p.difficulty_rating, p.source, p.olympiad_id
             FROM submissions s
             JOIN problems p ON p.id = s.problem_id
             WHERE s.user_id = %s
@@ -244,11 +267,15 @@ def get_user_profile(username: str, conn=Depends(get_db)):
 
 @app.get("/problems")
 def list_problems(source: str = "irodov", conn=Depends(get_db)):
+    cat_expr = normalized_category_sql("category")
     with conn.cursor() as cur:
         cur.execute(
-            """
-            SELECT id, irodov_code, title, category, difficulty_rating,
-                   statement_latex, svg_diagram, figure_url, answer_type, unit, variables_hint, source, olympiad_id
+            f"""
+            SELECT id, irodov_code, title,
+                   {cat_expr} AS category,
+                   category AS raw_category,
+                   difficulty_rating, statement_latex, svg_diagram, figure_url,
+                   answer_type, unit, variables_hint, source, olympiad_id
             FROM problems
             WHERE source = %s
             ORDER BY
@@ -263,10 +290,11 @@ def list_problems(source: str = "irodov", conn=Depends(get_db)):
 
 @app.get("/categories")
 def list_categories(conn=Depends(get_db)):
+    cat_expr = normalized_category_sql("category")
     with conn.cursor() as cur:
         cur.execute(
-            """
-            SELECT COALESCE(NULLIF(TRIM(category), ''), 'Física Geral') AS category,
+            f"""
+            SELECT {cat_expr} AS category,
                    COUNT(*) AS count
             FROM problems
             GROUP BY 1
@@ -283,13 +311,15 @@ def filter_problemset(
     search: Optional[str] = None,
     min_rating: Optional[int] = None,
     max_rating: Optional[int] = None,
+    sort: str = "rating_asc",
     conn=Depends(get_db),
 ):
+    cat_expr = normalized_category_sql("category")
     conditions = ["1=1"]
     params = []
 
     if category and category.lower() != "all":
-        conditions.append("LOWER(TRIM(category)) = LOWER(%s)")
+        conditions.append(f"LOWER({cat_expr}) = LOWER(%s)")
         params.append(category.strip())
 
     if source and source.lower() != "all":
@@ -312,13 +342,22 @@ def filter_problemset(
         conditions.append("difficulty_rating <= %s")
         params.append(max_rating)
 
+    order_map = {
+        "rating_asc": "difficulty_rating ASC, irodov_code ASC",
+        "rating_desc": "difficulty_rating DESC, irodov_code ASC",
+        "code": "irodov_code ASC",
+    }
+    order_by = order_map.get(sort, order_map["rating_asc"])
+
     query = f"""
-        SELECT id, irodov_code, title, category, difficulty_rating,
-               statement_latex, svg_diagram, figure_url, answer_type, unit,
-               variables_hint, source, olympiad_id
+        SELECT id, irodov_code, title,
+               {cat_expr} AS category,
+               category AS raw_category,
+               difficulty_rating, statement_latex, svg_diagram, figure_url,
+               answer_type, unit, variables_hint, source, olympiad_id
         FROM problems
         WHERE {' AND '.join(conditions)}
-        ORDER BY difficulty_rating ASC, irodov_code ASC
+        ORDER BY {order_by}
         LIMIT 300
     """
     with conn.cursor() as cur:
@@ -341,11 +380,15 @@ def list_olympiads(conn=Depends(get_db)):
 
 @app.get("/olympiads/{olympiad_id}/problems")
 def list_olympiad_problems(olympiad_id: str, conn=Depends(get_db)):
+    cat_expr = normalized_category_sql("category")
     with conn.cursor() as cur:
         cur.execute(
-            """
-            SELECT id, irodov_code, title, category, difficulty_rating,
-                   statement_latex, svg_diagram, figure_url, answer_type, unit, variables_hint, source, olympiad_id
+            f"""
+            SELECT id, irodov_code, title,
+                   {cat_expr} AS category,
+                   category AS raw_category,
+                   difficulty_rating, statement_latex, svg_diagram, figure_url,
+                   answer_type, unit, variables_hint, source, olympiad_id
             FROM problems
             WHERE olympiad_id = %s
             ORDER BY irodov_code ASC
