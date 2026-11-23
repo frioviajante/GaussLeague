@@ -1,5 +1,6 @@
 import os
 from datetime import datetime, timedelta, timezone
+from typing import Optional
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Depends, Header
 from fastapi.middleware.cors import CORSMiddleware
@@ -136,6 +137,13 @@ def signup(req: SignupRequest, conn=Depends(get_db)):
                 (req.username.strip(), req.email.strip().lower(), hashed),
             )
             user = cur.fetchone()
+            cur.execute(
+                """
+                INSERT INTO rating_history (user_id, old_rating, new_rating, delta)
+                VALUES (%s, %s, %s, 0)
+                """,
+                (user["id"], user["rating"], user["rating"]),
+            )
             conn.commit()
     except psycopg.errors.UniqueViolation:
         raise HTTPException(status_code=400, detail="E-mail ou username já cadastrado.")
@@ -169,13 +177,78 @@ def get_me(user_id: str = Depends(get_current_user_id), conn=Depends(get_db)):
         return user
 
 
+@app.get("/users/{username}")
+def get_user_profile(username: str, conn=Depends(get_db)):
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT id, username, rating, max_rating, solved_count
+            FROM users
+            WHERE LOWER(username) = LOWER(%s)
+            """,
+            (username.strip(),),
+        )
+        user = cur.fetchone()
+        if not user:
+            raise HTTPException(status_code=404, detail="Competidor não encontrado.")
+
+        cur.execute(
+            """
+            SELECT rh.id, rh.old_rating, rh.new_rating, rh.delta, rh.created_at,
+                   p.irodov_code AS problem_code, p.title AS problem_title
+            FROM rating_history rh
+            LEFT JOIN problems p ON p.id = rh.problem_id
+            WHERE rh.user_id = %s
+            ORDER BY rh.created_at ASC
+            """,
+            (user["id"],),
+        )
+        history = cur.fetchall()
+
+        cur.execute(
+            """
+            SELECT COALESCE(NULLIF(TRIM(p.category), ''), 'Física Geral') AS category,
+                   COUNT(DISTINCT p.id) AS count
+            FROM submissions s
+            JOIN problems p ON p.id = s.problem_id
+            WHERE s.user_id = %s AND s.verdict = 'AC'
+            GROUP BY 1
+            ORDER BY count DESC, 1 ASC
+            """,
+            (user["id"],),
+        )
+        category_stats = cur.fetchall()
+
+        cur.execute(
+            """
+            SELECT s.id, s.problem_id, s.verdict, s.created_at,
+                   p.irodov_code AS problem_code, p.title AS problem_title,
+                   p.category, p.difficulty_rating, p.source, p.olympiad_id
+            FROM submissions s
+            JOIN problems p ON p.id = s.problem_id
+            WHERE s.user_id = %s
+            ORDER BY s.created_at DESC
+            LIMIT 25
+            """,
+            (user["id"],),
+        )
+        recent_submissions = cur.fetchall()
+
+    return {
+        "user": user,
+        "rating_history": history,
+        "category_stats": category_stats,
+        "recent_submissions": recent_submissions,
+    }
+
+
 @app.get("/problems")
 def list_problems(source: str = "irodov", conn=Depends(get_db)):
     with conn.cursor() as cur:
         cur.execute(
             """
             SELECT id, irodov_code, title, category, difficulty_rating,
-                   statement_latex, svg_diagram, figure_url, answer_type, unit, variables_hint, source
+                   statement_latex, svg_diagram, figure_url, answer_type, unit, variables_hint, source, olympiad_id
             FROM problems
             WHERE source = %s
             ORDER BY
@@ -185,6 +258,71 @@ def list_problems(source: str = "irodov", conn=Depends(get_db)):
             """,
             (source,),
         )
+        return cur.fetchall()
+
+
+@app.get("/categories")
+def list_categories(conn=Depends(get_db)):
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT COALESCE(NULLIF(TRIM(category), ''), 'Física Geral') AS category,
+                   COUNT(*) AS count
+            FROM problems
+            GROUP BY 1
+            ORDER BY count DESC, 1 ASC
+            """
+        )
+        return cur.fetchall()
+
+
+@app.get("/problemset")
+def filter_problemset(
+    category: Optional[str] = None,
+    source: Optional[str] = None,
+    search: Optional[str] = None,
+    min_rating: Optional[int] = None,
+    max_rating: Optional[int] = None,
+    conn=Depends(get_db),
+):
+    conditions = ["1=1"]
+    params = []
+
+    if category and category.lower() != "all":
+        conditions.append("LOWER(TRIM(category)) = LOWER(%s)")
+        params.append(category.strip())
+
+    if source and source.lower() != "all":
+        if source.lower() == "olympiads":
+            conditions.append("olympiad_id IS NOT NULL")
+        else:
+            conditions.append("LOWER(source) = LOWER(%s)")
+            params.append(source.strip())
+
+    if search and search.strip():
+        conditions.append("(title ILIKE %s OR irodov_code ILIKE %s OR category ILIKE %s)")
+        like = f"%{search.strip()}%"
+        params.extend([like, like, like])
+
+    if min_rating is not None:
+        conditions.append("difficulty_rating >= %s")
+        params.append(min_rating)
+
+    if max_rating is not None:
+        conditions.append("difficulty_rating <= %s")
+        params.append(max_rating)
+
+    query = f"""
+        SELECT id, irodov_code, title, category, difficulty_rating,
+               statement_latex, svg_diagram, figure_url, answer_type, unit,
+               variables_hint, source, olympiad_id
+        FROM problems
+        WHERE {' AND '.join(conditions)}
+        ORDER BY difficulty_rating ASC, irodov_code ASC
+        LIMIT 300
+    """
+    with conn.cursor() as cur:
+        cur.execute(query, params)
         return cur.fetchall()
 
 
@@ -278,15 +416,25 @@ def submit_solution(req: SubmissionRequest, user_id: str = Depends(get_current_u
         )
         verdict = "AC" if is_correct else "WA"
 
+        cur.execute("SELECT rating FROM users WHERE id = %s", (user_id,))
+        old_rating = cur.fetchone()["rating"]
+
         if problem.get("olympiad_id") is None:
             cur.execute(
                 "SELECT apply_physelo_update(%s::uuid, %s::uuid, %s) AS new_rating",
                 (user_id, req.problem_id, is_correct),
             )
             new_rating = cur.fetchone()["new_rating"]
+            delta = new_rating - old_rating
+            cur.execute(
+                """
+                INSERT INTO rating_history (user_id, problem_id, old_rating, new_rating, delta)
+                VALUES (%s, %s, %s, %s, %s)
+                """,
+                (user_id, req.problem_id, old_rating, new_rating, delta),
+            )
         else:
-            cur.execute("SELECT rating FROM users WHERE id = %s", (user_id,))
-            new_rating = cur.fetchone()["rating"]
+            new_rating = old_rating
 
         cur.execute(
             """
