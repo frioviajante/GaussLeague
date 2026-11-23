@@ -21,6 +21,10 @@ import {
   Pause,
   RotateCcw,
   Award,
+  Tag,
+  Search,
+  User,
+  TrendingUp,
 } from 'lucide-react';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
@@ -34,6 +38,41 @@ interface UserProfile {
   rating: number;
   max_rating: number;
   solved_count: number;
+}
+
+interface RatingPoint {
+  id: string;
+  old_rating: number;
+  new_rating: number;
+  delta: number;
+  created_at: string;
+  problem_code?: string | null;
+  problem_title?: string | null;
+}
+
+interface CategoryStat {
+  category: string;
+  count: number;
+}
+
+interface ProfileSubmission {
+  id: string;
+  problem_id: string;
+  verdict: 'AC' | 'WA' | 'PE';
+  created_at: string;
+  problem_code: string;
+  problem_title: string;
+  category: string;
+  difficulty_rating: number;
+  source?: string;
+  olympiad_id?: string | null;
+}
+
+interface PublicProfileData {
+  user: UserProfile;
+  rating_history: RatingPoint[];
+  category_stats: CategoryStat[];
+  recent_submissions: ProfileSubmission[];
 }
 
 interface Olympiad {
@@ -95,8 +134,8 @@ const OLYMPIAD_CATALOG = [
   },
   {
     code: 'BIOPh',
-    name: 'Brazilian International Olympiad of Physics',
-    duration: '5h',
+    name: 'Baltic / Ibero / Online Physics',
+    duration: '4h',
     badge: 'text-cyan-400 border-cyan-500/30 bg-cyan-500/10',
   },
   {
@@ -105,6 +144,16 @@ const OLYMPIAD_CATALOG = [
     duration: '4h',
     badge: 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10',
   },
+];
+
+const RANK_BANDS = [
+  { min: 0, max: 1200, fill: 'rgba(148, 163, 184, 0.08)', stroke: '#94a3b8' },
+  { min: 1200, max: 1400, fill: 'rgba(16, 185, 129, 0.09)', stroke: '#34d399' },
+  { min: 1400, max: 1600, fill: 'rgba(6, 182, 212, 0.09)', stroke: '#22d3ee' },
+  { min: 1600, max: 1900, fill: 'rgba(59, 130, 246, 0.10)', stroke: '#60a5fa' },
+  { min: 1900, max: 2100, fill: 'rgba(168, 85, 247, 0.10)', stroke: '#c084fc' },
+  { min: 2100, max: 2400, fill: 'rgba(245, 158, 11, 0.10)', stroke: '#fbbf24' },
+  { min: 2400, max: 4000, fill: 'rgba(244, 63, 94, 0.10)', stroke: '#fb7185' },
 ];
 
 function getRankInfo(rating: number) {
@@ -126,6 +175,24 @@ function formatTimer(totalSeconds: number): string {
   const mins = Math.floor((totalSeconds % 3600) / 60);
   const secs = totalSeconds % 60;
   return [hrs, mins, secs].map((v) => String(v).padStart(2, '0')).join(':');
+}
+
+function formatShortDate(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
+}
+
+function formatFullDate(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toLocaleString('pt-BR', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
 }
 
 function toPreviewLatex(expr: string): string {
@@ -156,6 +223,171 @@ function MathText({ content }: { content: string }) {
   );
 }
 
+function RatingChart({ history, currentRating }: { history: RatingPoint[]; currentRating: number }) {
+  const [hoveredIdx, setHoveredIdx] = useState<number | null>(null);
+
+  const points: RatingPoint[] = useMemo(() => {
+    if (history.length > 0) return history;
+    return [
+      {
+        id: 'initial',
+        old_rating: currentRating,
+        new_rating: currentRating,
+        delta: 0,
+        created_at: new Date().toISOString(),
+        problem_code: null,
+        problem_title: 'Rating inicial',
+      },
+    ];
+  }, [history, currentRating]);
+
+  const width = 760;
+  const height = 270;
+  const pad = { top: 20, right: 24, bottom: 34, left: 52 };
+  const plotW = width - pad.left - pad.right;
+  const plotH = height - pad.top - pad.bottom;
+
+  const ratings = points.map((p) => p.new_rating);
+  const rawMin = Math.min(...ratings, 1100);
+  const rawMax = Math.max(...ratings, 1450);
+  const minY = Math.floor((rawMin - 100) / 100) * 100;
+  const maxY = Math.ceil((rawMax + 100) / 100) * 100;
+  const rangeY = Math.max(maxY - minY, 200);
+
+  const toX = (idx: number) =>
+    points.length === 1 ? pad.left + plotW / 2 : pad.left + (idx / (points.length - 1)) * plotW;
+  const toY = (val: number) => pad.top + ((maxY - val) / rangeY) * plotH;
+
+  const thresholds = [1200, 1400, 1600, 1900, 2100, 2400].filter((t) => t > minY && t < maxY);
+  const polylinePoints = points.map((p, idx) => `${toX(idx)},${toY(p.new_rating)}`).join(' ');
+  const activePoint = hoveredIdx !== null ? points[hoveredIdx] : points[points.length - 1];
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center justify-between gap-2 text-xs bg-[#0b0f19] border border-slate-800 rounded-lg px-4 py-2.5">
+        <div className="flex items-center gap-3">
+          <span className="font-mono font-bold text-white text-sm">{activePoint.new_rating}</span>
+          {activePoint.delta !== 0 && (
+            <span
+              className={`font-mono font-semibold ${
+                activePoint.delta > 0 ? 'text-emerald-400' : 'text-rose-400'
+              }`}
+            >
+              {activePoint.delta > 0 ? `+${activePoint.delta}` : activePoint.delta}
+            </span>
+          )}
+          <span className="text-slate-300">
+            {activePoint.problem_code
+              ? `${activePoint.problem_code} — ${activePoint.problem_title || ''}`
+              : activePoint.problem_title || 'Marco inicial'}
+          </span>
+        </div>
+        <span className="font-mono text-slate-500">{formatFullDate(activePoint.created_at)}</span>
+      </div>
+
+      <div className="w-full overflow-x-auto">
+        <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-auto min-w-[520px] select-none">
+          {/* Faixas de cor das patentes */}
+          {RANK_BANDS.map((band) => {
+            const topVal = Math.min(band.max, maxY);
+            const botVal = Math.max(band.min, minY);
+            if (topVal <= botVal) return null;
+            const y = toY(topVal);
+            const h = toY(botVal) - y;
+            return (
+              <rect
+                key={band.min}
+                x={pad.left}
+                y={y}
+                width={plotW}
+                height={h}
+                fill={band.fill}
+              />
+            );
+          })}
+
+          {/* Linhas de grade de patentes */}
+          {thresholds.map((t) => {
+            const y = toY(t);
+            return (
+              <g key={t}>
+                <line
+                  x1={pad.left}
+                  y1={y}
+                  x2={width - pad.right}
+                  y2={y}
+                  stroke="#334155"
+                  strokeDasharray="4 4"
+                  strokeWidth="1"
+                />
+                <text x={pad.left - 8} y={y + 4} textAnchor="end" fontSize="11" fill="#94a3b8" fontFamily="monospace">
+                  {t}
+                </text>
+              </g>
+            );
+          })}
+
+          {/* Rótulos do eixo X */}
+          {points.map((p, idx) => {
+            const step = Math.max(1, Math.ceil(points.length / 6));
+            if (idx % step !== 0 && idx !== points.length - 1) return null;
+            return (
+              <text
+                key={`x-${p.id}-${idx}`}
+                x={toX(idx)}
+                y={height - 10}
+                textAnchor="middle"
+                fontSize="10"
+                fill="#64748b"
+                fontFamily="monospace"
+              >
+                {formatShortDate(p.created_at)}
+              </text>
+            );
+          })}
+
+          {/* Linha de evolução */}
+          {points.length > 1 && (
+            <polyline
+              fill="none"
+              stroke="#f59e0b"
+              strokeWidth="2.5"
+              strokeLinejoin="round"
+              strokeLinecap="round"
+              points={polylinePoints}
+            />
+          )}
+
+          {/* Pontos clicáveis/hover */}
+          {points.map((p, idx) => {
+            const cx = toX(idx);
+            const cy = toY(p.new_rating);
+            const isActive = hoveredIdx === idx || (hoveredIdx === null && idx === points.length - 1);
+            return (
+              <g
+                key={`${p.id}-${idx}`}
+                onMouseEnter={() => setHoveredIdx(idx)}
+                onMouseLeave={() => setHoveredIdx(null)}
+                className="cursor-pointer"
+              >
+                <circle cx={cx} cy={cy} r={12} fill="transparent" />
+                <circle
+                  cx={cx}
+                  cy={cy}
+                  r={isActive ? 5.5 : 3.5}
+                  fill={isActive ? '#fbbf24' : '#0f172a'}
+                  stroke="#f59e0b"
+                  strokeWidth="2"
+                />
+              </g>
+            );
+          })}
+        </svg>
+      </div>
+    </div>
+  );
+}
+
 export default function GaussLeaguePage() {
   const [token, setToken] = useState<string | null>(null);
   const [user, setUser] = useState<UserProfile | null>(null);
@@ -167,7 +399,7 @@ export default function GaussLeaguePage() {
   const [authError, setAuthError] = useState<string | null>(null);
   const [authLoading, setAuthLoading] = useState(false);
 
-  const [activeTab, setActiveTab] = useState<'problem' | 'editorial' | 'standings' | 'olympiads'>('problem');
+  const [activeTab, setActiveTab] = useState<'problem' | 'tags' | 'editorial' | 'standings' | 'olympiads' | 'profile'>('problem');
   const [selectedSource, setSelectedSource] = useState<ProblemSource>('irodov');
   const [problems, setProblems] = useState<Problem[]>([]);
   const [selectedProblem, setSelectedProblem] = useState<Problem | null>(null);
@@ -176,6 +408,21 @@ export default function GaussLeaguePage() {
   const [submissions, setSubmissions] = useState<Submission[]>([]);
   const [leaderboard, setLeaderboard] = useState<UserProfile[]>([]);
   const [loadingData, setLoadingData] = useState(true);
+
+  // Estados da aba Tags / Problemset
+  const [categories, setCategories] = useState<CategoryStat[]>([]);
+  const [tagProblems, setTagProblems] = useState<Problem[]>([]);
+  const [loadingTags, setLoadingTags] = useState(false);
+  const [activeTag, setActiveTag] = useState<string>('all');
+  const [tagSourceFilter, setTagSourceFilter] = useState<string>('all');
+  const [tagSearch, setTagSearch] = useState('');
+  const [tagStatusFilter, setTagStatusFilter] = useState<'all' | 'solved' | 'unsolved'>('all');
+
+  // Estados da aba Perfil Público
+  const [profileData, setProfileData] = useState<PublicProfileData | null>(null);
+  const [profileLoading, setProfileLoading] = useState(false);
+  const [profileError, setProfileError] = useState<string | null>(null);
+  const [profileSearchInput, setProfileSearchInput] = useState('');
 
   // Estados das Olimpíadas (modo Unrated)
   const [olympiads, setOlympiads] = useState<Olympiad[]>([]);
@@ -203,6 +450,7 @@ export default function GaussLeaguePage() {
     }
     fetchLeaderboard();
     fetchOlympiads();
+    fetchCategories();
   }, []);
 
   useEffect(() => {
@@ -210,6 +458,12 @@ export default function GaussLeaguePage() {
       fetchProblems(selectedSource, true);
     }
   }, [selectedSource]);
+
+  useEffect(() => {
+    if (activeTab === 'tags') {
+      fetchFilteredProblemset(activeTag, tagSourceFilter, tagSearch);
+    }
+  }, [activeTab, activeTag, tagSourceFilter]);
 
   useEffect(() => {
     if (!timerRunning || timeLeftSeconds <= 0) return;
@@ -261,6 +515,68 @@ export default function GaussLeaguePage() {
     }
   }
 
+  async function fetchCategories() {
+    try {
+      const res = await fetch(`${API_URL}/categories`);
+      if (res.ok) {
+        setCategories(await res.json());
+      }
+    } catch {}
+  }
+
+  async function fetchFilteredProblemset(cat: string, src: string, q: string) {
+    setLoadingTags(true);
+    try {
+      const params = new URLSearchParams();
+      if (cat && cat !== 'all') params.set('category', cat);
+      if (src && src !== 'all') params.set('source', src);
+      if (q.trim()) params.set('search', q.trim());
+
+      const res = await fetch(`${API_URL}/problemset?${params.toString()}`);
+      if (res.ok) {
+        setTagProblems(await res.json());
+      }
+    } catch {
+      setTagProblems([]);
+    } finally {
+      setLoadingTags(false);
+    }
+  }
+
+  async function openUserProfile(targetUsername: string) {
+    const clean = targetUsername.trim();
+    if (!clean) return;
+    setActiveTab('profile');
+    setProfileLoading(true);
+    setProfileError(null);
+    setProfileSearchInput(clean);
+
+    try {
+      const res = await fetch(`${API_URL}/users/${encodeURIComponent(clean)}`);
+      const data = await res.json();
+      if (!res.ok) {
+        setProfileData(null);
+        setProfileError(data.detail || 'Competidor não encontrado.');
+      } else {
+        setProfileData(data);
+      }
+    } catch {
+      setProfileData(null);
+      setProfileError('Erro ao carregar perfil do competidor.');
+    } finally {
+      setProfileLoading(false);
+    }
+  }
+
+  function openProblemFromTagList(prob: Problem) {
+    setActiveOlympiad(null);
+    setTimerRunning(false);
+    setSelectedProblem(prob);
+    setLastFeedback(null);
+    setAnswerInput('');
+    setActiveTab('problem');
+  }
+
   async function fetchOlympiads() {
     setLoadingOlympiads(true);
     try {
@@ -269,7 +585,6 @@ export default function GaussLeaguePage() {
         setOlympiads(await res.json());
       }
     } catch {
-      // Backend ainda sem endpoint /olympiads
     } finally {
       setLoadingOlympiads(false);
     }
@@ -461,6 +776,14 @@ export default function GaussLeaguePage() {
     return new Set(submissions.filter((s) => s.verdict === 'AC').map((s) => s.problem_id));
   }, [submissions]);
 
+  const visibleTagProblems = useMemo(() => {
+    return tagProblems.filter((p) => {
+      if (tagStatusFilter === 'solved') return solvedProblemIds.has(p.id);
+      if (tagStatusFilter === 'unsolved') return !solvedProblemIds.has(p.id);
+      return true;
+    });
+  }, [tagProblems, tagStatusFilter, solvedProblemIds]);
+
   const olympiadSolvedCount = useMemo(() => {
     if (!activeOlympiad) return 0;
     return problems.filter((p) => solvedProblemIds.has(p.id)).length;
@@ -474,14 +797,21 @@ export default function GaussLeaguePage() {
   }, [olympiads, selectedCompetition]);
 
   const rank = getRankInfo(user?.rating ?? 1200);
-  const sourceLabel = activeOlympiad ? activeOlympiad.competition : selectedSource === 'noic' ? 'NOIC' : 'Irodov';
+  const currentProblemIsUnrated = Boolean(activeOlympiad || selectedProblem?.olympiad_id);
+  const sourceLabel = activeOlympiad
+    ? activeOlympiad.competition
+    : selectedProblem?.source
+    ? selectedProblem.source.toUpperCase()
+    : selectedSource === 'noic'
+    ? 'NOIC'
+    : 'Irodov';
 
   return (
     <div className="min-h-screen bg-[#0b0f19] text-slate-100 font-sans">
       <header className="border-b border-slate-800 bg-[#0f1629]/90 backdrop-blur sticky top-0 z-30">
-        <div className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-6">
-            <div className="flex items-center gap-2.5">
+        <div className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between gap-4">
+          <div className="flex items-center gap-6 min-w-0">
+            <div className="flex items-center gap-2.5 shrink-0">
               <div className="w-9 h-9 rounded-lg bg-indigo-600 flex items-center justify-center font-bold text-white shadow-lg shadow-indigo-600/30">
                 <Flame className="w-5 h-5" />
               </div>
@@ -491,7 +821,7 @@ export default function GaussLeaguePage() {
               </div>
             </div>
 
-            <nav className="hidden md:flex items-center gap-1">
+            <nav className="flex items-center gap-1 overflow-x-auto">
               <button
                 onClick={() => {
                   if (activeOlympiad) {
@@ -500,7 +830,7 @@ export default function GaussLeaguePage() {
                     setActiveTab('problem');
                   }
                 }}
-                className={`px-3 py-1.5 rounded-md text-sm font-medium transition ${
+                className={`px-3 py-1.5 rounded-md text-sm font-medium whitespace-nowrap transition ${
                   activeTab === 'problem' && !activeOlympiad
                     ? 'bg-indigo-600/20 text-indigo-300'
                     : 'text-slate-400 hover:text-white'
@@ -509,8 +839,19 @@ export default function GaussLeaguePage() {
                 Problemas
               </button>
               <button
+                onClick={() => {
+                  setActiveTab('tags');
+                  fetchCategories();
+                }}
+                className={`px-3 py-1.5 rounded-md text-sm font-medium whitespace-nowrap transition flex items-center gap-1.5 ${
+                  activeTab === 'tags' ? 'bg-indigo-600/20 text-indigo-300' : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                <Tag className="w-3.5 h-3.5" /> Tags
+              </button>
+              <button
                 onClick={openEditorialTab}
-                className={`px-3 py-1.5 rounded-md text-sm font-medium transition ${
+                className={`px-3 py-1.5 rounded-md text-sm font-medium whitespace-nowrap transition ${
                   activeTab === 'editorial' ? 'bg-indigo-600/20 text-indigo-300' : 'text-slate-400 hover:text-white'
                 }`}
               >
@@ -518,18 +859,18 @@ export default function GaussLeaguePage() {
               </button>
               <button
                 onClick={() => setActiveTab('standings')}
-                className={`px-3 py-1.5 rounded-md text-sm font-medium transition ${
+                className={`px-3 py-1.5 rounded-md text-sm font-medium whitespace-nowrap transition ${
                   activeTab === 'standings' ? 'bg-indigo-600/20 text-indigo-300' : 'text-slate-400 hover:text-white'
                 }`}
               >
-                Ranking (Rating)
+                Ranking
               </button>
               <button
                 onClick={() => {
                   setActiveTab('olympiads');
                   fetchOlympiads();
                 }}
-                className={`px-3 py-1.5 rounded-md text-sm font-medium transition ${
+                className={`px-3 py-1.5 rounded-md text-sm font-medium whitespace-nowrap transition ${
                   activeTab === 'olympiads' || (activeTab === 'problem' && activeOlympiad)
                     ? 'bg-indigo-600/20 text-indigo-300'
                     : 'text-slate-400 hover:text-white'
@@ -540,15 +881,28 @@ export default function GaussLeaguePage() {
             </nav>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 shrink-0">
             {user ? (
               <div className="flex items-center gap-3">
-                <div className="text-right hidden sm:block">
+                <button
+                  type="button"
+                  onClick={() => openUserProfile(user.username)}
+                  className="text-right hidden sm:block hover:opacity-85 transition"
+                  title="Ver meu perfil e gráfico de rating"
+                >
                   <div className={`text-sm font-bold ${rank.color}`}>{user.username}</div>
                   <div className="text-xs text-slate-400">
                     Rating: <span className={`font-mono font-semibold ${rank.color}`}>{user.rating}</span> ({rank.title})
                   </div>
-                </div>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => openUserProfile(user.username)}
+                  title="Meu Perfil"
+                  className="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition sm:hidden"
+                >
+                  <User className="w-4 h-4" />
+                </button>
                 <button
                   onClick={handleLogout}
                   title="Sair"
@@ -566,7 +920,7 @@ export default function GaussLeaguePage() {
                 className="flex items-center gap-2 px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-sm font-semibold text-white transition"
               >
                 <LogIn className="w-4 h-4" />
-                Entrar / Criar Conta
+                Entrar
               </button>
             )}
           </div>
@@ -574,7 +928,401 @@ export default function GaussLeaguePage() {
       </header>
 
       <main className="max-w-7xl mx-auto px-4 py-6">
-        {activeTab === 'olympiads' ? (
+        {activeTab === 'tags' ? (
+          <div className="space-y-6">
+            <div className="bg-[#111827] border border-slate-800 rounded-xl p-6 space-y-5">
+              <div className="flex flex-wrap items-center justify-between gap-4">
+                <div>
+                  <h2 className="text-xl font-bold text-white flex items-center gap-2">
+                    <Tag className="w-5 h-5 text-indigo-400" />
+                    Filtrar Questões por Tag
+                  </h2>
+                  <p className="text-sm text-slate-400 mt-1">
+                    Treine tópicos específicos de física combinando questões do Irodov, NOIC e Olimpíadas.
+                  </p>
+                </div>
+
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    fetchFilteredProblemset(activeTag, tagSourceFilter, tagSearch);
+                  }}
+                  className="flex items-center gap-2 w-full sm:w-auto"
+                >
+                  <div className="relative flex-1 sm:w-64">
+                    <Search className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
+                    <input
+                      type="text"
+                      value={tagSearch}
+                      onChange={(e) => setTagSearch(e.target.value)}
+                      placeholder="Buscar título ou código..."
+                      className="w-full pl-9 pr-3 py-2 rounded-lg bg-[#0b0f19] border border-slate-700 text-xs text-white focus:border-indigo-500 focus:outline-none"
+                    />
+                  </div>
+                  <button
+                    type="submit"
+                    className="px-3.5 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-xs font-semibold text-white transition"
+                  >
+                    Buscar
+                  </button>
+                </form>
+              </div>
+
+              {/* Filtros de Fonte e Status */}
+              <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-800 pt-4">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {[
+                    { key: 'all', label: 'Todas as fontes' },
+                    { key: 'irodov', label: 'Irodov' },
+                    { key: 'noic', label: 'NOIC' },
+                    { key: 'olympiads', label: 'Olimpíadas' },
+                  ].map((opt) => (
+                    <button
+                      key={opt.key}
+                      type="button"
+                      onClick={() => setTagSourceFilter(opt.key)}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
+                        tagSourceFilter === opt.key
+                          ? 'bg-indigo-600 text-white'
+                          : 'bg-slate-800/80 text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="flex items-center gap-1.5">
+                  {[
+                    { key: 'all', label: 'Todas' },
+                    { key: 'unsolved', label: 'Não resolvidas' },
+                    { key: 'solved', label: 'Resolvidas' },
+                  ].map((st) => (
+                    <button
+                      key={st.key}
+                      type="button"
+                      onClick={() => setTagStatusFilter(st.key as 'all' | 'solved' | 'unsolved')}
+                      className={`px-2.5 py-1.5 rounded-lg text-xs font-medium transition ${
+                        tagStatusFilter === st.key
+                          ? 'bg-slate-700 text-white'
+                          : 'text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      {st.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Pills de Tags / Categorias */}
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => setActiveTag('all')}
+                  className={`px-3 py-1.5 rounded-full text-xs font-medium border transition ${
+                    activeTag === 'all'
+                      ? 'bg-indigo-600/25 text-indigo-200 border-indigo-500/50'
+                      : 'bg-[#0b0f19] text-slate-400 border-slate-800 hover:border-slate-600 hover:text-white'
+                  }`}
+                >
+                  Todas as tags
+                </button>
+                {categories.map((cat) => (
+                  <button
+                    key={cat.category}
+                    type="button"
+                    onClick={() => setActiveTag(cat.category)}
+                    className={`px-3 py-1.5 rounded-full text-xs font-medium border transition ${
+                      activeTag === cat.category
+                        ? 'bg-indigo-600/25 text-indigo-200 border-indigo-500/50'
+                        : 'bg-[#0b0f19] text-slate-300 border-slate-800 hover:border-slate-600 hover:text-white'
+                    }`}
+                  >
+                    {cat.category}{' '}
+                    <span className="font-mono text-[11px] text-slate-500 ml-1">({cat.count})</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Tabela de Resultados */}
+            <div className="bg-[#111827] border border-slate-800 rounded-xl overflow-hidden">
+              <div className="px-6 py-3.5 border-b border-slate-800 flex items-center justify-between text-xs text-slate-400">
+                <span>
+                  Exibindo <strong className="text-white">{visibleTagProblems.length}</strong> questão(ões)
+                  {activeTag !== 'all' && (
+                    <>
+                      {' '}
+                      em <strong className="text-indigo-400">{activeTag}</strong>
+                    </>
+                  )}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => fetchFilteredProblemset(activeTag, tagSourceFilter, tagSearch)}
+                  className="hover:text-white flex items-center gap-1"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${loadingTags ? 'animate-spin' : ''}`} /> Atualizar
+                </button>
+              </div>
+
+              {loadingTags ? (
+                <div className="p-10 text-center text-sm text-slate-400">Carregando questões...</div>
+              ) : visibleTagProblems.length === 0 ? (
+                <div className="p-10 text-center text-sm text-slate-400">
+                  Nenhuma questão encontrada para esses filtros.
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse">
+                    <thead>
+                      <tr className="border-b border-slate-800 text-xs uppercase text-slate-400 bg-slate-900/50">
+                        <th className="py-3 px-4 w-10"></th>
+                        <th className="py-3 px-4">Código</th>
+                        <th className="py-3 px-4">Título</th>
+                        <th className="py-3 px-4">Tag</th>
+                        <th className="py-3 px-4">Fonte</th>
+                        <th className="py-3 px-4 text-right">Rating</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800/70 text-sm">
+                      {visibleTagProblems.map((prob) => {
+                        const isSolved = solvedProblemIds.has(prob.id);
+                        return (
+                          <tr
+                            key={prob.id}
+                            onClick={() => openProblemFromTagList(prob)}
+                            className="hover:bg-slate-800/40 cursor-pointer transition"
+                          >
+                            <td className="py-3 px-4">
+                              {isSolved ? (
+                                <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                              ) : (
+                                <div className="w-4 h-4 rounded-full border border-slate-700" />
+                              )}
+                            </td>
+                            <td className="py-3 px-4 font-mono text-xs text-indigo-400 whitespace-nowrap">
+                              {prob.irodov_code}
+                            </td>
+                            <td className="py-3 px-4 font-medium text-slate-200">{prob.title}</td>
+                            <td className="py-3 px-4">
+                              <span className="px-2 py-0.5 rounded-full text-xs bg-slate-800 text-slate-300 border border-slate-700 whitespace-nowrap">
+                                {prob.category}
+                              </span>
+                            </td>
+                            <td className="py-3 px-4">
+                              <span
+                                className={`px-2 py-0.5 rounded text-[11px] font-mono uppercase ${
+                                  prob.olympiad_id
+                                    ? 'bg-amber-500/15 text-amber-300'
+                                    : prob.source === 'noic'
+                                    ? 'bg-emerald-500/15 text-emerald-300'
+                                    : 'bg-indigo-500/15 text-indigo-300'
+                                }`}
+                              >
+                                {prob.source || 'irodov'}
+                              </span>
+                            </td>
+                            <td className="py-3 px-4 text-right font-mono text-xs whitespace-nowrap">
+                              {prob.olympiad_id ? (
+                                <span className="text-slate-400">Unrated</span>
+                              ) : (
+                                <span className="text-amber-400 font-semibold">*{prob.difficulty_rating}</span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </div>
+        ) : activeTab === 'profile' ? (
+          <div className="space-y-6">
+            {/* Barra de busca de qualquer perfil */}
+            <div className="bg-[#111827] border border-slate-800 rounded-xl p-4 flex flex-wrap items-center justify-between gap-3">
+              <button
+                type="button"
+                onClick={() => setActiveTab('standings')}
+                className="flex items-center gap-1.5 text-xs text-slate-400 hover:text-white"
+              >
+                <ArrowLeft className="w-4 h-4" /> Voltar ao Ranking
+              </button>
+
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  openUserProfile(profileSearchInput);
+                }}
+                className="flex items-center gap-2 w-full sm:w-auto"
+              >
+                <div className="relative flex-1 sm:w-64">
+                  <Search className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    value={profileSearchInput}
+                    onChange={(e) => setProfileSearchInput(e.target.value)}
+                    placeholder="Acessar perfil por handle..."
+                    className="w-full pl-9 pr-3 py-1.5 rounded-lg bg-[#0b0f19] border border-slate-700 text-xs text-white focus:border-indigo-500 focus:outline-none"
+                  />
+                </div>
+                <button
+                  type="submit"
+                  className="px-3.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-xs font-semibold text-white transition"
+                >
+                  Abrir Perfil
+                </button>
+              </form>
+            </div>
+
+            {profileLoading ? (
+              <div className="bg-[#111827] border border-slate-800 rounded-xl p-12 text-center text-slate-400">
+                Carregando estatísticas e histórico de rating...
+              </div>
+            ) : profileError || !profileData ? (
+              <div className="bg-[#111827] border border-slate-800 rounded-xl p-12 text-center text-slate-400">
+                {profileError || 'Selecione um competidor no Ranking ou pesquise um handle acima.'}
+              </div>
+            ) : (
+              (() => {
+                const pUser = profileData.user;
+                const pRank = getRankInfo(pUser.rating);
+                const maxRank = getRankInfo(pUser.max_rating);
+                const maxCatCount = Math.max(...profileData.category_stats.map((c) => c.count), 1);
+
+                return (
+                  <div className="space-y-6">
+                    {/* Cabeçalho do Perfil */}
+                    <div className="bg-[#111827] border border-slate-800 rounded-xl p-6 flex flex-wrap items-center justify-between gap-6">
+                      <div className="flex items-center gap-4">
+                        <div className="w-14 h-14 rounded-xl bg-slate-800 border border-slate-700 flex items-center justify-center">
+                          <User className={`w-7 h-7 ${pRank.color}`} />
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-2.5">
+                            <h2 className={`text-2xl font-bold ${pRank.color}`}>{pUser.username}</h2>
+                            <span className={`px-2.5 py-0.5 rounded-full text-xs border ${pRank.badge}`}>
+                              {pRank.title}
+                            </span>
+                          </div>
+                          <p className="text-xs text-slate-400 mt-1">
+                            Máximo histórico:{' '}
+                            <span className={`font-mono font-bold ${maxRank.color}`}>
+                              {pUser.max_rating} ({maxRank.title})
+                            </span>
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-3 gap-4 text-center">
+                        <div className="px-4 py-2.5 rounded-lg bg-[#0b0f19] border border-slate-800">
+                          <div className={`text-xl font-mono font-bold ${pRank.color}`}>{pUser.rating}</div>
+                          <div className="text-[11px] text-slate-400">PhysElo Atual</div>
+                        </div>
+                        <div className="px-4 py-2.5 rounded-lg bg-[#0b0f19] border border-slate-800">
+                          <div className={`text-xl font-mono font-bold ${maxRank.color}`}>{pUser.max_rating}</div>
+                          <div className="text-[11px] text-slate-400">Pico de Rating</div>
+                        </div>
+                        <div className="px-4 py-2.5 rounded-lg bg-[#0b0f19] border border-slate-800">
+                          <div className="text-xl font-mono font-bold text-emerald-400">{pUser.solved_count}</div>
+                          <div className="text-[11px] text-slate-400">Resolvidos</div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Gráfico de Evolução de Rating */}
+                    <div className="bg-[#111827] border border-slate-800 rounded-xl p-6 space-y-4">
+                      <div className="flex items-center justify-between">
+                        <h3 className="font-bold text-white flex items-center gap-2">
+                          <TrendingUp className="w-5 h-5 text-amber-400" />
+                          Evolução do Rating (PhysElo)
+                        </h3>
+                        <span className="text-xs font-mono text-slate-500">
+                          {profileData.rating_history.length} registro(s)
+                        </span>
+                      </div>
+
+                      <RatingChart history={profileData.rating_history} currentRating={pUser.rating} />
+                    </div>
+
+                    {/* Grid inferior: Tags resolvidas + Submissões recentes */}
+                    <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+                      <div className="lg:col-span-5 bg-[#111827] border border-slate-800 rounded-xl p-6 space-y-4">
+                        <h3 className="font-bold text-white flex items-center gap-2 text-sm">
+                          <Tag className="w-4 h-4 text-indigo-400" />
+                          Domínio por Tag (Questões AC)
+                        </h3>
+
+                        {profileData.category_stats.length === 0 ? (
+                          <p className="text-xs text-slate-400">Nenhuma questão resolvida ainda.</p>
+                        ) : (
+                          <div className="space-y-3">
+                            {profileData.category_stats.map((stat) => (
+                              <div key={stat.category} className="space-y-1">
+                                <div className="flex justify-between text-xs">
+                                  <span className="text-slate-200">{stat.category}</span>
+                                  <span className="font-mono text-slate-400">{stat.count}</span>
+                                </div>
+                                <div className="w-full h-2 rounded-full bg-slate-800 overflow-hidden">
+                                  <div
+                                    className="h-full bg-indigo-500 rounded-full"
+                                    style={{ width: `${Math.round((stat.count / maxCatCount) * 100)}%` }}
+                                  />
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="lg:col-span-7 bg-[#111827] border border-slate-800 rounded-xl overflow-hidden">
+                        <div className="px-6 py-4 border-b border-slate-800 flex items-center justify-between">
+                          <h3 className="font-bold text-white text-sm flex items-center gap-2">
+                            <Clock className="w-4 h-4 text-indigo-400" />
+                            Submissões Recentes
+                          </h3>
+                        </div>
+
+                        {profileData.recent_submissions.length === 0 ? (
+                          <div className="p-8 text-center text-xs text-slate-400">
+                            Nenhuma submissão registrada ainda.
+                          </div>
+                        ) : (
+                          <div className="divide-y divide-slate-800/70 max-h-80 overflow-y-auto text-xs">
+                            {profileData.recent_submissions.map((sub) => (
+                              <div key={sub.id} className="px-5 py-3 flex items-center justify-between gap-4">
+                                <div className="min-w-0">
+                                  <div className="flex items-center gap-2">
+                                    <span className="font-mono text-indigo-400">{sub.problem_code}</span>
+                                    <span className="text-slate-200 font-medium truncate">{sub.problem_title}</span>
+                                  </div>
+                                  <div className="text-[11px] text-slate-500 mt-0.5">
+                                    {sub.category} • {formatFullDate(sub.created_at)}
+                                  </div>
+                                </div>
+                                <span
+                                  className={`px-2 py-0.5 rounded font-mono font-bold shrink-0 ${
+                                    sub.verdict === 'AC'
+                                      ? 'bg-emerald-500/20 text-emerald-400'
+                                      : 'bg-rose-500/20 text-rose-400'
+                                  }`}
+                                >
+                                  {sub.verdict}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()
+            )}
+          </div>
+        ) : activeTab === 'olympiads' ? (
           <div className="space-y-6">
             <div className="bg-[#111827] border border-slate-800 rounded-xl p-6 flex flex-wrap items-center justify-between gap-4">
               <div>
@@ -693,17 +1441,42 @@ export default function GaussLeaguePage() {
           </div>
         ) : activeTab === 'standings' ? (
           <div className="bg-[#111827] border border-slate-800 rounded-xl overflow-hidden">
-            <div className="px-6 py-4 border-b border-slate-800 flex items-center justify-between">
+            <div className="px-6 py-4 border-b border-slate-800 flex flex-wrap items-center justify-between gap-3">
               <div className="flex items-center gap-2">
                 <Trophy className="w-5 h-5 text-amber-400" />
                 <h2 className="font-bold text-lg">Classificação Global — PhysElo</h2>
               </div>
-              <button
-                onClick={fetchLeaderboard}
-                className="text-xs text-slate-400 hover:text-white flex items-center gap-1"
-              >
-                <RefreshCw className="w-3.5 h-3.5" /> Atualizar
-              </button>
+
+              <div className="flex items-center gap-3">
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    openUserProfile(profileSearchInput);
+                  }}
+                  className="flex items-center gap-1.5"
+                >
+                  <input
+                    type="text"
+                    value={profileSearchInput}
+                    onChange={(e) => setProfileSearchInput(e.target.value)}
+                    placeholder="Buscar perfil..."
+                    className="px-3 py-1.5 rounded-lg bg-[#0b0f19] border border-slate-700 text-xs text-white w-36 sm:w-44 focus:border-indigo-500 focus:outline-none"
+                  />
+                  <button
+                    type="submit"
+                    className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-indigo-600 text-xs text-slate-200 transition"
+                  >
+                    Ver
+                  </button>
+                </form>
+
+                <button
+                  onClick={fetchLeaderboard}
+                  className="text-xs text-slate-400 hover:text-white flex items-center gap-1"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" /> Atualizar
+                </button>
+              </div>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full text-left border-collapse">
@@ -720,9 +1493,13 @@ export default function GaussLeaguePage() {
                   {leaderboard.map((u, index) => {
                     const userRank = getRankInfo(u.rating);
                     return (
-                      <tr key={u.id} className="hover:bg-slate-800/30 transition">
+                      <tr
+                        key={u.id}
+                        onClick={() => openUserProfile(u.username)}
+                        className="hover:bg-slate-800/40 cursor-pointer transition"
+                      >
                         <td className="py-3.5 px-6 font-mono text-slate-400">{index + 1}</td>
-                        <td className={`py-3.5 px-6 font-bold ${userRank.color}`}>{u.username}</td>
+                        <td className={`py-3.5 px-6 font-bold hover:underline ${userRank.color}`}>{u.username}</td>
                         <td className="py-3.5 px-6">
                           <span className={`px-2.5 py-0.5 rounded-full text-xs border ${userRank.badge}`}>
                             {userRank.title}
@@ -859,17 +1636,27 @@ export default function GaussLeaguePage() {
                           <div className="flex items-center gap-2 text-xs font-mono text-slate-400 mb-1">
                             <span
                               className={`px-2 py-0.5 rounded ${
-                                activeOlympiad
+                                currentProblemIsUnrated
                                   ? 'bg-amber-500/15 text-amber-300 border border-amber-500/30'
-                                  : selectedSource === 'noic'
+                                  : selectedProblem.source === 'noic'
                                   ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30'
                                   : 'bg-slate-800 text-indigo-300'
                               }`}
                             >
-                              {activeOlympiad ? selectedProblem.irodov_code : `${sourceLabel} ${selectedProblem.irodov_code}`}
+                              {currentProblemIsUnrated ? selectedProblem.irodov_code : `${sourceLabel} ${selectedProblem.irodov_code}`}
                             </span>
                             <span>•</span>
-                            <span>{selectedProblem.category}</span>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setActiveTag(selectedProblem.category);
+                                setActiveTab('tags');
+                              }}
+                              className="hover:text-indigo-400 transition"
+                              title="Filtrar mais questões desta tag"
+                            >
+                              {selectedProblem.category}
+                            </button>
                           </div>
                           <h1 className="text-2xl font-bold text-white">{selectedProblem.title}</h1>
                         </div>
@@ -881,7 +1668,7 @@ export default function GaussLeaguePage() {
                             </span>
                           )}
                           <span className="px-3 py-1 rounded-md bg-slate-800 text-xs font-mono text-slate-300 border border-slate-700">
-                            {activeOlympiad ? (
+                            {currentProblemIsUnrated ? (
                               <strong className="text-amber-400">Unrated</strong>
                             ) : (
                               <>
@@ -1052,7 +1839,7 @@ export default function GaussLeaguePage() {
                             : 'text-indigo-400'
                         }`}
                       />
-                      {activeOlympiad ? activeOlympiad.title : `Acervo ${sourceLabel}`}
+                      {activeOlympiad ? activeOlympiad.title : `Acervo ${selectedSource === 'noic' ? 'NOIC' : 'Irodov'}`}
                     </span>
                     <span className="text-xs text-slate-400">{problems.length} itens</span>
                   </div>
