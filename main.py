@@ -146,6 +146,33 @@ def list_problems(source: str = "irodov", conn=Depends(get_db)):
         )
         return cur.fetchall()
 
+@app.get("/olympiads")
+def list_olympiads(conn=Depends(get_db)):
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT id, competition, year, title, duration_minutes
+            FROM olympiads
+            ORDER BY competition ASC, year DESC
+            """
+        )
+        return cur.fetchall()
+
+@app.get("/olympiads/{olympiad_id}/problems")
+def list_olympiad_problems(olympiad_id: str, conn=Depends(get_db)):
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT id, irodov_code, title, category, difficulty_rating,
+                   statement_latex, svg_diagram, figure_url, answer_type, unit, variables_hint, olympiad_id
+            FROM problems
+            WHERE olympiad_id = %s
+            ORDER BY irodov_code ASC
+            """,
+            (olympiad_id,),
+        )
+        return cur.fetchall()
+
 @app.get("/problems/{problem_id}/editorial")
 def get_editorial(problem_id: str, user_id: str = Depends(get_current_user_id), conn=Depends(get_db)):
     with conn.cursor() as cur:
@@ -205,8 +232,15 @@ def submit_solution(req: SubmissionRequest, user_id: str = Depends(get_current_u
         verdict = "AC" if is_correct else "WA"
 
         cur.execute(
-            "SELECT apply_physelo_update(%s::uuid, %s::uuid, %s) AS new_rating",
-            (user_id, req.problem_id, is_correct),
+            if problem.get("olympiad_id") is None:
+                cur.execute(
+                    "SELECT apply_physelo_update(%s::uuid, %s::uuid, %s) AS new_rating",
+                    (user_id, req.problem_id, is_correct),
+                )
+                new_rating = cur.fetchone()["new_rating"]
+            else:
+                cur.execute("SELECT rating FROM users WHERE id = %s", (user_id,))
+                new_rating = cur.fetchone()["rating"]
         )
         new_rating = cur.fetchone()["new_rating"]
 
