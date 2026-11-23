@@ -95,8 +95,8 @@ const OLYMPIAD_CATALOG = [
   },
   {
     code: 'BIOPh',
-    name: 'Baltic / Ibero / Online Physics',
-    duration: '4h',
+    name: 'Brazilian International Olympiad of Physics',
+    duration: '5h',
     badge: 'text-cyan-400 border-cyan-500/30 bg-cyan-500/10',
   },
   {
