@@ -114,7 +114,7 @@ export default function GaussLeaguePage() {
   const [authError, setAuthError] = useState<string | null>(null);
   const [authLoading, setAuthLoading] = useState(false);
 
-  const [activeTab, setActiveTab] = useState<'problem' | 'editorial' | 'standings'>('problem');
+  const [activeTab, setActiveTab] = useState<'problem' | 'editorial' | 'standings' | 'olympiads'>('problem');
   const [selectedSource, setSelectedSource] = useState<ProblemSource>('irodov');
   const [problems, setProblems] = useState<Problem[]>([]);
   const [selectedProblem, setSelectedProblem] = useState<Problem | null>(null);
@@ -368,6 +368,14 @@ export default function GaussLeaguePage() {
                 }`}
               >
                 Ranking (Rating)
+              </button>
+              <button
+                onClick={() => setActiveTab('olympiads')}
+                className={`px-3 py-1.5 rounded-md text-sm font-medium transition ${
+                  activeTab === 'olympiads' ? 'bg-indigo-600/20 text-indigo-300' : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                Olimpíadas
               </button>
             </nav>
           </div>
