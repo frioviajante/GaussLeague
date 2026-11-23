@@ -414,6 +414,50 @@ export default function GaussLeaguePage() {
       </header>
 
       <main className="max-w-7xl mx-auto px-4 py-6">
+        {activeTab === 'olympiads' ? (
+          <div className="space-y-6">
+            <div className="bg-[#111827] border border-slate-800 rounded-xl p-6">
+              <h2 className="text-xl font-bold text-white">Simulador de Olimpíadas</h2>
+              <p className="text-sm text-slate-400 mt-1">
+                Escolha uma competição para simular provas antigas com correção automática via SymPy (modo Unrated).
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+              {[
+                { code: 'IPhO', name: 'International Physics Olympiad', duration: '5h', badge: 'text-amber-400 border-amber-500/30 bg-amber-500/10' },
+                { code: 'EuPhO', name: 'European Physics Olympiad', duration: '5h', badge: 'text-blue-400 border-blue-500/30 bg-blue-500/10' },
+                { code: 'APhO', name: 'Asian Physics Olympiad', duration: '5h', badge: 'text-rose-400 border-rose-500/30 bg-rose-500/10' },
+                { code: 'RMPH', name: 'Romanian Master of Physics', duration: '5h', badge: 'text-purple-400 border-purple-500/30 bg-purple-500/10' },
+                { code: 'BIOPh', name: 'Baltic / Ibero / Online Physics', duration: '4h', badge: 'text-cyan-400 border-cyan-500/30 bg-cyan-500/10' },
+                { code: 'OBF', name: 'Olimpíada Brasileira de Física', duration: '4h', badge: 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10' },
+              ].map((oly) => (
+                <div
+                  key={oly.code}
+                  className="bg-[#111827] border border-slate-800 hover:border-indigo-500/50 rounded-xl p-5 flex flex-col justify-between transition"
+                >
+                  <div>
+                    <div className="flex items-center justify-between mb-3">
+                      <span className={`px-2.5 py-0.5 rounded-md text-xs font-mono font-bold border ${oly.badge}`}>
+                        {oly.code}
+                      </span>
+                      <span className="text-xs font-mono text-slate-500">Tempo: {oly.duration}</span>
+                    </div>
+                    <h3 className="font-bold text-white text-base">{oly.name}</h3>
+                    <p className="text-xs text-slate-400 mt-1">Provas antigas em breve no acervo.</p>
+                  </div>
+
+                  <button
+                    type="button"
+                    className="mt-5 w-full py-2 rounded-lg bg-slate-800 hover:bg-indigo-600 text-xs font-semibold text-slate-200 hover:text-white transition"
+                  >
+                    Explorar edições
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : activeTab === 'standings' ? (
         {activeTab === 'standings' ? (
           <div className="bg-[#111827] border border-slate-800 rounded-xl overflow-hidden">
             <div className="px-6 py-4 border-b border-slate-800 flex items-center justify-between">
