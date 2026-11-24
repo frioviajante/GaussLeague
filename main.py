@@ -1,21 +1,39 @@
 import os
+import random
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Optional
+
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Depends, Header
+from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from sympy import Symbol, simplify
-from sympy.parsing.sympy_parser import (
-    parse_expr,
-    standard_transformations,
-    implicit_multiplication_application,
-    convert_xor,
-)
-from passlib.context import CryptContext
 import jwt
+from passlib.context import CryptContext
+import pint
 import psycopg
 from psycopg.rows import dict_row
+from pydantic import BaseModel
+from sympy import (
+    Symbol,
+    acos,
+    asin,
+    atan,
+    cos,
+    exp,
+    log,
+    pi,
+    posify,
+    simplify,
+    sin,
+    sqrt,
+    tan,
+)
+from sympy.parsing.sympy_parser import (
+    convert_xor,
+    implicit_multiplication_application,
+    parse_expr,
+    standard_transformations,
+)
 
 load_dotenv(".env.local")
 load_dotenv()
@@ -24,14 +42,30 @@ DATABASE_URL = os.environ.get("DATABASE_URL")
 JWT_SECRET = os.environ.get("JWT_SECRET", "irodov-arena-dev-secret-key")
 JWT_ALGORITHM = "HS256"
 
+ureg = pint.UnitRegistry()
+Q_ = ureg.Quantity
+
 TRANSFORMATIONS = standard_transformations + (
     implicit_multiplication_application,
     convert_xor,
 )
 
 PHYSICS_LOCALS = {
-    name: Symbol(name)
-    for name in ("S", "N", "Q", "O", "C", "E", "I", "gamma", "beta", "zeta")
+    **{
+        name: Symbol(name)
+        for name in ("S", "N", "Q", "O", "C", "E", "I", "gamma", "beta", "zeta")
+    },
+    "sen": sin,
+    "tg": tan,
+    "arcsen": asin,
+    "arcsin": asin,
+    "arccos": acos,
+    "arctan": atan,
+    "arctg": atan,
+    "ln": log,
+    "pi": pi,
+    "sqrt": sqrt,
+    "exp": exp,
 }
 
 app = FastAPI(title="Gauss League Judge API")
@@ -114,27 +148,206 @@ def _clean_expr(raw: str) -> str:
     s = raw.strip()
     if "=" in s:
         s = s.split("=")[-1].strip()
-    return s.replace("×", "*").replace("\\cdot", "*")
+    s = re.sub(r"(?<=\d),(?=\d)", ".", s)  # vírgula decimal: 9,8 -> 9.8
+    return s.replace("×", "*").replace("\\cdot", "*").replace("⋅", "*")
 
 
-def check_answer(user_input: str, expected_answer: str, answer_type: str, tolerance: float = 0.02) -> bool:
+def _normalize_unit_str(unit: str) -> str:
+    u = unit.strip().strip("[]()")
+    if not u:
+        return ""
+    u = (
+        u.replace("²", "**2")
+        .replace("³", "**3")
+        .replace("⁻¹", "**-1")
+        .replace("⁻²", "**-2")
+        .replace("⁻³", "**-3")
+        .replace("^", "**")
+        .replace("Ω", "ohm")
+        .replace("µ", "u")
+        .replace("μ", "u")
+        .replace("°C", "degC")
+        .replace("ºC", "degC")
+        .replace("°F", "degF")
+        .replace("ºF", "degF")
+        .replace("°", "deg")
+        .replace("º", "deg")
+        .replace("%", "percent")
+        .replace("×", "*")
+        .replace("·", "*")
+        .replace("⋅", "*")
+    )
+    u = re.sub(r"\boC\b", "degC", u)
+    u = re.sub(r"\bAtm\b", "atm", u)
+    u = re.sub(r"\bohms?\b", "ohm", u, flags=re.IGNORECASE)
+    u = re.sub(r"\bseg(?:undos?)?\b", "s", u, flags=re.IGNORECASE)
+    u = re.sub(r"\bhoras?\b", "h", u, flags=re.IGNORECASE)
+    u = re.sub(r"\bgraus?\b", "deg", u, flags=re.IGNORECASE)
+    u = re.sub(r"(?<=[a-zA-Z])\.(?=[a-zA-Z])", "*", u)  # N.m -> N*m, J.s -> J*s
+    u = re.sub(r"([a-zA-Z]+)(\d+)\b", r"\1**\2", u)     # m/s2 -> m/s**2, cm3 -> cm**3
+
+    if ("/" in u or "*" in u) and "degC" in u:
+        u = u.replace("degC", "K")
+    return u.strip()
+
+
+def _try_eval_pure_number(expr_str: str) -> Optional[float]:
     try:
-        u_clean = _clean_expr(user_input)
-        e_clean = _clean_expr(expected_answer)
+        expr = parse_expr(expr_str, local_dict=PHYSICS_LOCALS, transformations=TRANSFORMATIONS)
+        if expr.free_symbols:
+            return None
+        val = complex(expr.evalf())
+        if abs(val.imag) > 1e-9:
+            return None
+        return float(val.real)
+    except Exception:
+        return None
 
+
+def _try_parse_unit(unit_str: str) -> Optional[str]:
+    norm = _normalize_unit_str(unit_str)
+    if not norm:
+        return None
+    try:
+        Q_(1.0, norm)
+        return norm
+    except Exception:
+        return None
+
+
+def _parse_quantity(raw: str) -> tuple[Optional[float], Optional[str]]:
+    """Extrai (valor_float, unidade_normalizada_ou_None) aceitando expressões + unidades."""
+    s = _clean_expr(raw)
+    if not s:
+        return None, None
+
+    # 1. Expressão puramente numérica sem unidade (ex: "0.1", "1/10", "sqrt(2)/2", "2*pi")
+    pure_val = _try_eval_pure_number(s)
+    if pure_val is not None:
+        return pure_val, None
+
+    # 2. Número/expressão separado da unidade por espaço (ex: "1/10 m/s", "sqrt(2) km/h", "10 m / s")
+    for m in re.finditer(r"\s+", s):
+        left = s[: m.start()].strip()
+        right = s[m.end() :].strip()
+        if not left or not right:
+            continue
+        val = _try_eval_pure_number(left)
+        if val is not None:
+            unit_norm = _try_parse_unit(right)
+            if unit_norm is not None:
+                return val, unit_norm
+
+    # 3. Número colado na unidade sem espaço (ex: "10cm/s", "500g", "20°C", "1.5e-3km/h")
+    m_tight = re.match(r"^([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)\s*(.+)$", s)
+    if m_tight:
+        val = float(m_tight.group(1))
+        unit_norm = _try_parse_unit(m_tight.group(2))
+        if unit_norm is not None:
+            return val, unit_norm
+
+    return None, None
+
+
+def _close_enough(u_val: float, e_val: float, tolerance: float) -> bool:
+    if e_val == 0:
+        return abs(u_val) <= tolerance
+    return abs(u_val - e_val) / abs(e_val) <= tolerance
+
+
+def _numeric_algebraic_equiv(u_expr, e_expr, n_tests: int = 6) -> bool:
+    """Fallback numérico em pontos reais positivos para identidades que o simplify não reduz."""
+    syms = sorted(u_expr.free_symbols | e_expr.free_symbols, key=lambda s: s.name)
+    rng = random.Random(1337)
+    valid = 0
+
+    for low, high in ((0.15, 0.85), (1.15, 3.85)):
+        for _ in range(n_tests):
+            subs = {s: rng.uniform(low, high) for s in syms}
+            try:
+                uv = complex(u_expr.evalf(subs=subs))
+                ev = complex(e_expr.evalf(subs=subs))
+            except Exception:
+                continue
+            if abs(uv.imag) > 1e-6 or abs(ev.imag) > 1e-6:
+                continue
+            ur, er = uv.real, ev.real
+            if not (abs(ur) < 1e12 and abs(er) < 1e12):
+                continue
+            if abs(ur - er) > 1e-5 * max(1.0, abs(er)):
+                return False
+            valid += 1
+            if valid >= n_tests:
+                return True
+
+    return False
+
+
+def check_answer(
+    user_input: str,
+    expected_answer: str,
+    answer_type: str,
+    tolerance: float = 0.02,
+    expected_unit: str = "",
+) -> bool:
+    try:
         if answer_type == "numeric":
-            u_val = float(parse_expr(u_clean, transformations=TRANSFORMATIONS).evalf())
-            e_val = float(parse_expr(e_clean, transformations=TRANSFORMATIONS).evalf())
-            if e_val == 0:
-                return abs(u_val) <= tolerance
-            return abs(u_val - e_val) / abs(e_val) <= tolerance
+            e_val, e_inline_unit = _parse_quantity(expected_answer)
+            if e_val is None:
+                return False
+
+            eff_e_unit = e_inline_unit or _try_parse_unit(expected_unit)
+
+            # Fallback para unidades não-físicas (ex: "blocos", "R$")
+            raw_user = user_input
+            if expected_unit and eff_e_unit is None:
+                cleaned_custom = expected_unit.strip()
+                if raw_user.strip().lower().endswith(cleaned_custom.lower()):
+                    raw_user = raw_user.strip()[: -len(cleaned_custom)].strip()
+
+            u_val, u_unit = _parse_quantity(raw_user)
+            if u_val is None:
+                return False
+
+            # Caso A: usuário digitou unidade e a questão tem unidade física cadastrada
+            if u_unit is not None and eff_e_unit is not None:
+                u_q = Q_(u_val, u_unit)
+                e_q = Q_(e_val, eff_e_unit)
+                if not u_q.is_compatible_with(e_q):
+                    return False
+                u_converted = float(u_q.to(e_q.units).magnitude)
+                return _close_enough(u_converted, e_val, tolerance)
+
+            # Caso B: usuário digitou apenas o número (assume a unidade padrão do enunciado)
+            if u_unit is None:
+                return _close_enough(u_val, e_val, tolerance)
+
+            # Caso C: questão sem unidade cadastrada, mas usuário digitou unidade adimensional (%, rad, deg)
+            u_q = Q_(u_val, u_unit)
+            if u_q.dimensionless:
+                return _close_enough(float(u_q.to_base_units().magnitude), e_val, tolerance)
+
+            return False
 
         elif answer_type == "algebraic":
-            u_expr = parse_expr(u_clean, local_dict=PHYSICS_LOCALS, transformations=TRANSFORMATIONS)
-            e_expr = parse_expr(e_clean, local_dict=PHYSICS_LOCALS, transformations=TRANSFORMATIONS)
+            u_expr = parse_expr(_clean_expr(user_input), local_dict=PHYSICS_LOCALS, transformations=TRANSFORMATIONS)
+            e_expr = parse_expr(_clean_expr(expected_answer), local_dict=PHYSICS_LOCALS, transformations=TRANSFORMATIONS)
+
             if simplify(u_expr - e_expr) == 0:
                 return True
-            return bool(u_expr.equals(e_expr))
+
+            # Assume parâmetros físicos positivos (resolve sqrt(g*h) == sqrt(g)*sqrt(h), sqrt(v**2) == v)
+            try:
+                (u_pos, e_pos), _ = posify([u_expr, e_expr])
+                if simplify(u_pos - e_pos) == 0:
+                    return True
+            except Exception:
+                pass
+
+            if bool(u_expr.equals(e_expr)):
+                return True
+
+            return _numeric_algebraic_equiv(u_expr, e_expr)
     except Exception:
         return False
     return False
@@ -456,6 +669,7 @@ def submit_solution(req: SubmissionRequest, user_id: str = Depends(get_current_u
             problem["expected_answer"],
             problem["answer_type"],
             problem.get("tolerance") or 0.02,
+            problem.get("unit") or "",
         )
         verdict = "AC" if is_correct else "WA"
 
