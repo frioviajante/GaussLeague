@@ -72,7 +72,7 @@ PHYSICS_LOCALS = {
     "exp": exp,
 }
 
-app = FastAPI(title="Gauss League Judge API")
+app = FastAPI(title="NOIC League Judge API")
 
 app.add_middleware(
     CORSMiddleware,
@@ -361,7 +361,7 @@ def check_answer(
 
 @app.get("/")
 def health_check():
-    return {"status": "online", "service": "Gauss League SymPy Judge"}
+    return {"status": "online", "service": "NOIC League SymPy Judge"}
 
 
 @app.post("/auth/signup")
