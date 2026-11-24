@@ -93,7 +93,7 @@ interface Problem {
   statement_latex: string;
   svg_diagram?: string;
   figure_url?: string | null;
-  answer_type: 'numeric' | 'algebraic';
+  answer_type: 'numeric' | 'algebraic' | 'self_graded';
   unit?: string;
   variables_hint?: string;
   source?: string;
@@ -449,6 +449,16 @@ export default function GaussLeaguePage() {
     unrated?: boolean;
   } | null>(null);
 
+  // Estados da Autoavaliação (self_graded)
+  const [selfGradeEditorial, setSelfGradeEditorial] = useState<string | null>(null);
+  const [selfGradeLoading, setSelfGradeLoading] = useState(false);
+  const [selfGradeError, setSelfGradeError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setSelfGradeEditorial(null);
+    setSelfGradeError(null);
+  }, [selectedProblem?.id]);
+
   useEffect(() => {
     const savedToken = localStorage.getItem('irodov_token');
     if (savedToken) {
@@ -778,7 +788,9 @@ export default function GaussLeaguePage() {
     setSubmitting(true);
     setLastFeedback(null);
     const oldRating = user.rating;
-    const isUnrated = Boolean(activeOlympiad || selectedProblem.olympiad_id);
+    const isUnrated = Boolean(
+      activeOlympiad || selectedProblem.olympiad_id || selectedProblem.answer_type === 'self_graded'
+    );
 
     try {
       const res = await fetch(`${API_URL}/submit`, {
@@ -805,7 +817,10 @@ export default function GaussLeaguePage() {
               ...prev,
               rating: result.new_rating,
               max_rating: Math.max(prev.max_rating, result.new_rating),
-              solved_count: isAC && !solvedProblemIds.has(selectedProblem.id) ? prev.solved_count + 1 : prev.solved_count,
+              solved_count:
+                !isUnrated && isAC && !solvedProblemIds.has(selectedProblem.id)
+                  ? prev.solved_count + 1
+                  : prev.solved_count,
             }
           : null
       );
@@ -825,6 +840,72 @@ export default function GaussLeaguePage() {
       }
       await Promise.all(refreshTasks);
       if (isAC) setAnswerInput('');
+    } catch (err: any) {
+      setLastFeedback({ verdict: 'WA', message: err.message });
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function handleRevealSelfGradeSolution() {
+    if (!token || !user) {
+      setAuthModalOpen(true);
+      return;
+    }
+    if (!selectedProblem) return;
+
+    setSelfGradeLoading(true);
+    setSelfGradeError(null);
+    try {
+      const res = await fetch(`${API_URL}/problems/${selectedProblem.id}/editorial`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || 'Erro ao carregar solução oficial.');
+      setSelfGradeEditorial(data.editorial_latex || 'Solução oficial não disponível.');
+    } catch (err: any) {
+      setSelfGradeError(err.message);
+    } finally {
+      setSelfGradeLoading(false);
+    }
+  }
+
+  async function handleSelfGradeSubmit(verdictChoice: 'AC' | 'WA') {
+    if (!token || !user) {
+      setAuthModalOpen(true);
+      return;
+    }
+    if (!selectedProblem) return;
+
+    setSubmitting(true);
+    setLastFeedback(null);
+    try {
+      const res = await fetch(`${API_URL}/submit`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          problem_id: selectedProblem.id,
+          answer: '',
+          self_verdict: verdictChoice,
+        }),
+      });
+      const result = await res.json();
+      if (!res.ok) throw new Error(result.detail || 'Erro ao registrar autoavaliação.');
+
+      setLastFeedback({
+        verdict: result.verdict,
+        message:
+          verdictChoice === 'AC'
+            ? 'Autoavaliação registrada como AC (Unrated).'
+            : 'Autoavaliação registrada como WA. Revise o editorial e tente novamente.',
+        ratingDelta: 0,
+        unrated: true,
+      });
+
+      await fetchUserSubmissions(token);
     } catch (err: any) {
       setLastFeedback({ verdict: 'WA', message: err.message });
     } finally {
@@ -857,7 +938,9 @@ export default function GaussLeaguePage() {
   }, [olympiads, selectedCompetition]);
 
   const rank = getRankInfo(user?.rating ?? 1200);
-  const currentProblemIsUnrated = Boolean(activeOlympiad || selectedProblem?.olympiad_id);
+  const currentProblemIsUnrated = Boolean(
+    activeOlympiad || selectedProblem?.olympiad_id || selectedProblem?.answer_type === 'self_graded'
+  );
   const sourceLabel = activeOlympiad
     ? activeOlympiad.competition
     : selectedProblem?.source
@@ -1240,6 +1323,7 @@ export default function GaussLeaguePage() {
                     <tbody className="divide-y divide-slate-800/70 text-sm">
                       {visibleTagProblems.map((prob) => {
                         const isSolved = solvedProblemIds.has(prob.id);
+                        const isProbUnrated = Boolean(prob.olympiad_id || prob.answer_type === 'self_graded');
                         const showSub =
                           prob.raw_category &&
                           prob.raw_category.trim().toLowerCase() !== prob.category.trim().toLowerCase();
@@ -1260,7 +1344,14 @@ export default function GaussLeaguePage() {
                             <td className="py-3 px-4 font-mono text-xs text-indigo-400 whitespace-nowrap">
                               {prob.irodov_code}
                             </td>
-                            <td className="py-3 px-4 font-medium text-slate-200">{prob.title}</td>
+                            <td className="py-3 px-4 font-medium text-slate-200">
+                              <span>{prob.title}</span>
+                              {prob.answer_type === 'self_graded' && (
+                                <span className="ml-2 px-1.5 py-0.5 rounded text-[10px] font-mono bg-amber-500/15 text-amber-300 border border-amber-500/30">
+                                  Discursiva
+                                </span>
+                              )}
+                            </td>
                             <td className="py-3 px-4 whitespace-nowrap">
                               <span className="px-2 py-0.5 rounded-full text-xs bg-slate-800 text-slate-200 border border-slate-700">
                                 {prob.category}
@@ -1284,7 +1375,7 @@ export default function GaussLeaguePage() {
                             </td>
                             <td className="py-3 px-4 text-right font-mono text-xs whitespace-nowrap">
                               <span className="text-amber-400 font-semibold">*{prob.difficulty_rating}</span>
-                              {prob.olympiad_id && (
+                              {isProbUnrated && (
                                 <span className="ml-1.5 text-[10px] text-slate-500">(Unrated)</span>
                               )}
                             </td>
@@ -1862,101 +1953,195 @@ export default function GaussLeaguePage() {
                         />
                       )}
 
-                      <div className="p-3.5 rounded-lg bg-slate-900/90 border border-slate-800 text-xs text-slate-300 flex items-center justify-between">
+                      <div className="p-3.5 rounded-lg bg-slate-900/90 border border-slate-800 text-xs text-slate-300 flex items-center justify-between gap-4">
                         <div>
                           <span className="font-semibold text-indigo-400">Formato esperado: </span>
-                          {selectedProblem.answer_type === 'algebraic'
+                          {selectedProblem.answer_type === 'self_graded'
+                            ? 'Demonstração / Gráfico / Discursiva (Autoavaliação — Unrated)'
+                            : selectedProblem.answer_type === 'algebraic'
                             ? `Expressão simbólica (${selectedProblem.variables_hint || 'use g, m, R, v_0, alpha...'})`
                             : `Valor numérico ${selectedProblem.unit ? `em [${selectedProblem.unit}]` : ''}`}
                         </div>
-                        <span className="font-mono text-slate-500">Motor: SymPy</span>
+                        <span className="font-mono text-slate-500 shrink-0">
+                          Motor: {selectedProblem.answer_type === 'self_graded' ? 'Autoavaliação' : 'SymPy'}
+                        </span>
                       </div>
                     </div>
 
-                    <form
-                      onSubmit={handleSubmitSolution}
-                      className="bg-[#111827] border border-slate-800 rounded-xl p-6 space-y-4"
-                    >
-                      <div className="flex items-center justify-between">
-                        <label className="text-sm font-semibold text-slate-200 flex items-center gap-2">
-                          <Code2 className="w-4 h-4 text-indigo-400" />
-                          Sua Resposta ({selectedProblem.answer_type === 'algebraic' ? 'Algébrica' : 'Numérica'})
-                        </label>
-                        <span className="text-xs text-slate-500">Ex: sqrt(2*g*h) ou 2*R/3</span>
-                      </div>
-
-                      <input
-                        type="text"
-                        value={answerInput}
-                        onChange={(e) => setAnswerInput(e.target.value)}
-                        placeholder={
-                          selectedProblem.answer_type === 'algebraic'
-                            ? 'Digite a expressão em sintaxe Python/SymPy...'
-                            : 'Digite o valor numérico (ex: 4.9 ou 1.5e-3)...'
-                        }
-                        className="w-full px-4 py-3 rounded-lg bg-[#0b0f19] border border-slate-700 focus:border-indigo-500 focus:outline-none font-mono text-sm text-white"
-                      />
-
-                      {answerInput.trim() && (
-                        <div className="p-3 rounded-lg bg-[#0b0f19]/80 border border-slate-800 flex items-center justify-between">
-                          <span className="text-xs text-slate-500">Preview matemático:</span>
-                          <div className="text-indigo-300">
-                            <InlineMath math={toPreviewLatex(answerInput)} />
+                    {selectedProblem.answer_type === 'self_graded' ? (
+                      <div className="bg-[#111827] border border-slate-800 rounded-xl p-6 space-y-5">
+                        <div className="flex items-center justify-between">
+                          <div className="text-sm font-semibold text-slate-200 flex items-center gap-2">
+                            <BookOpen className="w-4 h-4 text-amber-400" />
+                            Autoavaliação (Discursiva / Demonstração)
                           </div>
+                          <span className="px-2 py-0.5 rounded text-[11px] font-mono bg-amber-500/15 text-amber-300 border border-amber-500/30">
+                            UNRATED
+                          </span>
                         </div>
-                      )}
 
-                      {lastFeedback && (
-                        <div
-                          className={`p-4 rounded-lg border flex items-center justify-between text-sm ${
-                            lastFeedback.verdict === 'AC'
-                              ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
-                              : 'bg-rose-500/10 border-rose-500/30 text-rose-300'
-                          }`}
-                        >
-                          <div className="flex items-center gap-2.5">
-                            {lastFeedback.verdict === 'AC' ? (
-                              <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0" />
-                            ) : (
-                              <XCircle className="w-5 h-5 text-rose-400 shrink-0" />
+                        {selfGradeEditorial === null ? (
+                          <div className="space-y-3">
+                            <p className="text-xs text-slate-400">
+                              Resolva este item no papel (demonstração, análise qualitativa ou esboço de gráfico). Quando terminar, revele a solução oficial para se autoavaliar.
+                            </p>
+                            {selfGradeError && (
+                              <div className="p-3 rounded-lg bg-rose-500/10 border border-rose-500/30 text-xs text-rose-300">
+                                {selfGradeError}
+                              </div>
                             )}
-                            <span>{lastFeedback.message}</span>
+                            <button
+                              type="button"
+                              onClick={handleRevealSelfGradeSolution}
+                              disabled={selfGradeLoading}
+                              className="w-full py-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-sm font-semibold text-white transition flex items-center justify-center gap-2"
+                            >
+                              <BookOpen className="w-4 h-4" />
+                              {selfGradeLoading ? 'Carregando solução...' : 'Revelar Solução Oficial e Autoavaliar'}
+                            </button>
                           </div>
-                          {lastFeedback.unrated ? (
+                        ) : (
+                          <div className="space-y-4">
+                            <div className="p-4 rounded-lg bg-[#0b0f19] border border-slate-800 space-y-2">
+                              <div className="text-xs font-mono uppercase text-indigo-400">Solução Oficial</div>
+                              <div className="prose prose-invert max-w-none text-sm">
+                                <MathText content={selfGradeEditorial} />
+                              </div>
+                            </div>
+
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                              <button
+                                type="button"
+                                disabled={submitting}
+                                onClick={() => handleSelfGradeSubmit('AC')}
+                                className="py-2.5 px-4 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-sm font-semibold text-white transition flex items-center justify-center gap-2"
+                              >
+                                <CheckCircle2 className="w-4 h-4" />
+                                Acertei (Marcar AC)
+                              </button>
+                              <button
+                                type="button"
+                                disabled={submitting}
+                                onClick={() => handleSelfGradeSubmit('WA')}
+                                className="py-2.5 px-4 rounded-lg bg-rose-600/80 hover:bg-rose-600 disabled:opacity-50 text-sm font-semibold text-white transition flex items-center justify-center gap-2"
+                              >
+                                <XCircle className="w-4 h-4" />
+                                Errei / Revisar (Marcar WA)
+                              </button>
+                            </div>
+                          </div>
+                        )}
+
+                        {lastFeedback && (
+                          <div
+                            className={`p-4 rounded-lg border flex items-center justify-between text-sm ${
+                              lastFeedback.verdict === 'AC'
+                                ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
+                                : 'bg-rose-500/10 border-rose-500/30 text-rose-300'
+                            }`}
+                          >
+                            <div className="flex items-center gap-2.5">
+                              {lastFeedback.verdict === 'AC' ? (
+                                <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0" />
+                              ) : (
+                                <XCircle className="w-5 h-5 text-rose-400 shrink-0" />
+                              )}
+                              <span>{lastFeedback.message}</span>
+                            </div>
                             <span className="font-mono text-xs text-slate-400">Unrated</span>
-                          ) : (
-                            typeof lastFeedback.ratingDelta === 'number' &&
-                            lastFeedback.ratingDelta !== 0 && (
-                              <span className="font-mono font-bold">
-                                {lastFeedback.ratingDelta > 0
-                                  ? `+${lastFeedback.ratingDelta}`
-                                  : lastFeedback.ratingDelta}{' '}
-                                Elo
-                              </span>
-                            )
-                          )}
-                        </div>
-                      )}
-
-                      <div className="flex items-center justify-between pt-2">
-                        <button
-                          type="button"
-                          onClick={openEditorialTab}
-                          className="text-xs text-slate-400 hover:text-indigo-400 flex items-center gap-1.5 transition"
-                        >
-                          <BookOpen className="w-4 h-4" /> Ver Editorial
-                        </button>
-
-                        <button
-                          type="submit"
-                          disabled={submitting || !answerInput.trim()}
-                          className="flex items-center gap-2 px-5 py-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-sm font-semibold text-white transition"
-                        >
-                          <Send className="w-4 h-4" />
-                          {submitting ? 'Julgando...' : 'Submeter Solução'}
-                        </button>
+                          </div>
+                        )}
                       </div>
-                    </form>
+                    ) : (
+                      <form
+                        onSubmit={handleSubmitSolution}
+                        className="bg-[#111827] border border-slate-800 rounded-xl p-6 space-y-4"
+                      >
+                        <div className="flex items-center justify-between">
+                          <label className="text-sm font-semibold text-slate-200 flex items-center gap-2">
+                            <Code2 className="w-4 h-4 text-indigo-400" />
+                            Sua Resposta ({selectedProblem.answer_type === 'algebraic' ? 'Algébrica' : 'Numérica'})
+                          </label>
+                          <span className="text-xs text-slate-500">
+                            {selectedProblem.answer_type === 'algebraic'
+                              ? 'Ex: sqrt(2*g*h) ou 2*R/3'
+                              : 'Ex: 0.1, 10 cm/s ou 0.36 km/h'}
+                          </span>
+                        </div>
+
+                        <input
+                          type="text"
+                          value={answerInput}
+                          onChange={(e) => setAnswerInput(e.target.value)}
+                          placeholder={
+                            selectedProblem.answer_type === 'algebraic'
+                              ? 'Digite a expressão em sintaxe Python/SymPy...'
+                              : 'Digite o valor com ou sem unidade (ex: 0.1, 10 cm/s ou 0.36 km/h)...'
+                          }
+                          className="w-full px-4 py-3 rounded-lg bg-[#0b0f19] border border-slate-700 focus:border-indigo-500 focus:outline-none font-mono text-sm text-white"
+                        />
+
+                        {answerInput.trim() && (
+                          <div className="p-3 rounded-lg bg-[#0b0f19]/80 border border-slate-800 flex items-center justify-between">
+                            <span className="text-xs text-slate-500">Preview matemático:</span>
+                            <div className="text-indigo-300">
+                              <InlineMath math={toPreviewLatex(answerInput)} />
+                            </div>
+                          </div>
+                        )}
+
+                        {lastFeedback && (
+                          <div
+                            className={`p-4 rounded-lg border flex items-center justify-between text-sm ${
+                              lastFeedback.verdict === 'AC'
+                                ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
+                                : 'bg-rose-500/10 border-rose-500/30 text-rose-300'
+                            }`}
+                          >
+                            <div className="flex items-center gap-2.5">
+                              {lastFeedback.verdict === 'AC' ? (
+                                <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0" />
+                              ) : (
+                                <XCircle className="w-5 h-5 text-rose-400 shrink-0" />
+                              )}
+                              <span>{lastFeedback.message}</span>
+                            </div>
+                            {lastFeedback.unrated ? (
+                              <span className="font-mono text-xs text-slate-400">Unrated</span>
+                            ) : (
+                              typeof lastFeedback.ratingDelta === 'number' &&
+                              lastFeedback.ratingDelta !== 0 && (
+                                <span className="font-mono font-bold">
+                                  {lastFeedback.ratingDelta > 0
+                                    ? `+${lastFeedback.ratingDelta}`
+                                    : lastFeedback.ratingDelta}{' '}
+                                  Elo
+                                </span>
+                              )
+                            )}
+                          </div>
+                        )}
+
+                        <div className="flex items-center justify-between pt-2">
+                          <button
+                            type="button"
+                            onClick={openEditorialTab}
+                            className="text-xs text-slate-400 hover:text-indigo-400 flex items-center gap-1.5 transition"
+                          >
+                            <BookOpen className="w-4 h-4" /> Ver Editorial
+                          </button>
+
+                          <button
+                            type="submit"
+                            disabled={submitting || !answerInput.trim()}
+                            className="flex items-center gap-2 px-5 py-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-sm font-semibold text-white transition"
+                          >
+                            <Send className="w-4 h-4" />
+                            {submitting ? 'Julgando...' : 'Submeter Solução'}
+                          </button>
+                        </div>
+                      </form>
+                    )}
                   </>
                 )}
               </div>
