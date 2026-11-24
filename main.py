@@ -53,7 +53,11 @@ TRANSFORMATIONS = standard_transformations + (
 PHYSICS_LOCALS = {
     **{
         name: Symbol(name)
-        for name in ("S", "N", "Q", "O", "C", "E", "I", "gamma", "beta", "zeta")
+        for name in (
+            "S", "N", "Q", "O", "C", "E", "I",
+            "gamma", "beta", "zeta",
+            "Lambda", "Ei", "Si", "Ci", "Li", "lam",
+        )
     },
     "sen": sin,
     "tg": tan,
