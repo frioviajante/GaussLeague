@@ -12,7 +12,6 @@ import {
   Send,
   LogIn,
   LogOut,
-  Flame,
   BarChart3,
   RefreshCw,
   AlertCircle,
@@ -26,6 +25,7 @@ import {
   User,
   TrendingUp,
 } from 'lucide-react';
+import noicLogo from './noic.png';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
@@ -393,7 +393,7 @@ function RatingChart({ history, currentRating }: { history: RatingPoint[]; curre
   );
 }
 
-export default function GaussLeaguePage() {
+export default function NoicLeaguePage() {
   const [token, setToken] = useState<string | null>(null);
   const [user, setUser] = useState<UserProfile | null>(null);
   const [authModalOpen, setAuthModalOpen] = useState(false);
@@ -955,11 +955,13 @@ export default function GaussLeaguePage() {
         <div className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between gap-4">
           <div className="flex items-center gap-6 min-w-0">
             <div className="flex items-center gap-2.5 shrink-0">
-              <div className="w-9 h-9 rounded-lg bg-indigo-600 flex items-center justify-center font-bold text-white shadow-lg shadow-indigo-600/30">
-                <Flame className="w-5 h-5" />
-              </div>
+              <img
+                src={noicLogo.src}
+                alt="Logo NOIC"
+                className="w-9 h-9 rounded-lg object-contain bg-white/95 p-1 shadow-lg shadow-indigo-600/20"
+              />
               <div>
-                <span className="font-bold text-lg tracking-tight text-white">Gauss</span>
+                <span className="font-bold text-lg tracking-tight text-white">NOIC</span>{' '}
                 <span className="font-bold text-lg tracking-tight text-indigo-400">League</span>
               </div>
             </div>
@@ -2287,7 +2289,7 @@ export default function GaussLeaguePage() {
           <div className="bg-[#111827] border border-slate-800 rounded-xl max-w-md w-full p-6 space-y-5">
             <div className="flex items-center justify-between">
               <h3 className="text-lg font-bold text-white">
-                {authMode === 'login' ? 'Entrar na Gauss League' : 'Criar Conta de Competidor'}
+                {authMode === 'login' ? 'Entrar na NOIC League' : 'Criar Conta de Competidor'}
               </h3>
               <button
                 onClick={() => setAuthModalOpen(false)}
@@ -2306,7 +2308,7 @@ export default function GaussLeaguePage() {
                     required
                     value={username}
                     onChange={(e) => setUsername(e.target.value)}
-                    placeholder="ex: gauss_br"
+                    placeholder="ex: fisica_noic"
                     className="w-full px-3.5 py-2 rounded-lg bg-[#0b0f19] border border-slate-700 text-sm text-white"
                   />
                 </div>
