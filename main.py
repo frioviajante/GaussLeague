@@ -153,7 +153,8 @@ def _clean_expr(raw: str) -> str:
     s = raw.strip()
     if "=" in s:
         s = s.split("=")[-1].strip()
-    s = re.sub(r"(?<=\d),(?=\d)", ".", s)  # vírgula decimal: 9,8 -> 9.8
+    s = re.sub(r"(?<=\d),(?=\d)", ".", s)
+    s = re.sub(r"(?<![a-zA-Z_])lambda(?![a-zA-Z0-9_])", "lam", s)
     return s.replace("×", "*").replace("\\cdot", "*").replace("⋅", "*")
 
 
