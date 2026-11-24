@@ -3,7 +3,7 @@ import 'katex/dist/katex.min.css';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'Gauss League — Competitive Physics & SymPy Judge',
+  title: 'NOIC League — Competitive Physics & SymPy Judge',
   description: 'Plataforma competitiva de resolução de problemas do Irodov e NOIC com julgamento simbólico.',
 };
 
