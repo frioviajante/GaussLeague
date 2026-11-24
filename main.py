@@ -2,7 +2,7 @@ import os
 import random
 import re
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import Literal, Optional
 
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, Header, HTTPException
@@ -122,7 +122,8 @@ class LoginRequest(BaseModel):
 
 class SubmissionRequest(BaseModel):
     problem_id: str
-    answer: str
+    answer: str = ""
+    self_verdict: Optional[Literal["AC", "WA"]] = None
 
 
 def create_token(user_id: str) -> str:
@@ -614,16 +615,20 @@ def list_olympiad_problems(olympiad_id: str, conn=Depends(get_db)):
 @app.get("/problems/{problem_id}/editorial")
 def get_editorial(problem_id: str, user_id: str = Depends(get_current_user_id), conn=Depends(get_db)):
     with conn.cursor() as cur:
-        cur.execute(
-            "SELECT 1 FROM submissions WHERE user_id = %s AND problem_id = %s AND verdict = 'AC'",
-            (user_id, problem_id),
-        )
-        if not cur.fetchone():
-            raise HTTPException(status_code=403, detail="Resolva o problema primeiro para desbloquear o editorial.")
-
-        cur.execute("SELECT editorial_latex FROM problems WHERE id = %s", (problem_id,))
+        cur.execute("SELECT answer_type, editorial_latex FROM problems WHERE id = %s", (problem_id,))
         row = cur.fetchone()
-        return {"editorial_latex": row["editorial_latex"] if row else ""}
+        if not row:
+            raise HTTPException(status_code=404, detail="Problema não encontrado.")
+
+        if row["answer_type"] != "self_graded":
+            cur.execute(
+                "SELECT 1 FROM submissions WHERE user_id = %s AND problem_id = %s AND verdict = 'AC'",
+                (user_id, problem_id),
+            )
+            if not cur.fetchone():
+                raise HTTPException(status_code=403, detail="Resolva o problema primeiro para desbloquear o editorial.")
+
+        return {"editorial_latex": row["editorial_latex"] or ""}
 
 
 @app.get("/leaderboard")
@@ -664,19 +669,32 @@ def submit_solution(req: SubmissionRequest, user_id: str = Depends(get_current_u
         if not problem:
             raise HTTPException(status_code=404, detail="Problema não encontrado.")
 
-        is_correct = check_answer(
-            req.answer,
-            problem["expected_answer"],
-            problem["answer_type"],
-            problem.get("tolerance") or 0.02,
-            problem.get("unit") or "",
-        )
-        verdict = "AC" if is_correct else "WA"
+        is_self_graded = problem["answer_type"] == "self_graded"
+
+        if is_self_graded:
+            if req.self_verdict not in ("AC", "WA"):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Informe self_verdict ('AC' ou 'WA') para questões de autoavaliação.",
+                )
+            is_correct = req.self_verdict == "AC"
+            verdict = req.self_verdict
+            submitted_text = req.answer.strip() or f"[Autoavaliação: {verdict}]"
+        else:
+            is_correct = check_answer(
+                req.answer,
+                problem["expected_answer"],
+                problem["answer_type"],
+                problem.get("tolerance") or 0.02,
+                problem.get("unit") or "",
+            )
+            verdict = "AC" if is_correct else "WA"
+            submitted_text = req.answer
 
         cur.execute("SELECT rating FROM users WHERE id = %s", (user_id,))
         old_rating = cur.fetchone()["rating"]
 
-        if problem.get("olympiad_id") is None:
+        if problem.get("olympiad_id") is None and not is_self_graded:
             cur.execute(
                 "SELECT apply_physelo_update(%s::uuid, %s::uuid, %s) AS new_rating",
                 (user_id, req.problem_id, is_correct),
@@ -699,7 +717,7 @@ def submit_solution(req: SubmissionRequest, user_id: str = Depends(get_current_u
             VALUES (%s, %s, %s, %s)
             RETURNING id, problem_id, submitted_answer, verdict, created_at
             """,
-            (user_id, req.problem_id, req.answer, verdict),
+            (user_id, req.problem_id, submitted_text, verdict),
         )
         sub = cur.fetchone()
         conn.commit()
