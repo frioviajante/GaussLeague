@@ -216,16 +216,57 @@ function toPreviewLatex(expr: string): string {
     .replace(/\^([a-zA-Z0-9-]+)/g, '^{$1}');
 }
 
+function normalizeLatexText(raw: string): string {
+  if (!raw) return '';
+  let text = raw
+    // Converte \[ ... \] e \( ... \) para $$ ... $$ e $ ... $
+    .replace(/\\\[([\s\S]*?)\\\]/g, (_, inner) => `$$${inner}$$`)
+    .replace(/\\\(([\s\S]*?)\\\)/g, (_, inner) => `$${inner}$`)
+    // Corrige barra dupla antes de comandos LaTeX comuns (ex: \\mu -> \mu, \\frac -> \frac)
+    .replace(
+      /\\\\(?=(?:mu|nu|alpha|beta|gamma|delta|Delta|epsilon|varepsilon|zeta|eta|theta|vartheta|Theta|iota|kappa|lambda|Lambda|xi|pi|Pi|rho|sigma|Sigma|tau|phi|varphi|Phi|chi|psi|Psi|omega|Omega|frac|dfrac|sqrt|cdot|times|pm|mp|approx|leq|geq|neq|equiv|propto|infty|partial|nabla|vec|hat|bar|dot|ddot|sin|cos|tan|cot|sec|csc|ln|log|exp|text|mathrm|mathbf|left|right|sum|int|lim|to|rightarrow|degree)\b)/g,
+      '\\'
+    );
+
+  // Envolve comandos gregos/matemáticos que ficaram soltos fora de $...$
+  const segments = text.split(/(\$\$[\s\S]*?\$\$|\$[^$]+\$)/g);
+  return segments
+    .map((seg) => {
+      if ((seg.startsWith('$$') && seg.endsWith('$$')) || (seg.startsWith('$') && seg.endsWith('$'))) {
+        return seg;
+      }
+      return seg.replace(
+        /\\(mu|nu|alpha|beta|gamma|delta|Delta|epsilon|varepsilon|zeta|eta|theta|vartheta|Theta|lambda|Lambda|pi|Pi|rho|sigma|Sigma|tau|phi|varphi|Phi|chi|psi|Psi|omega|Omega|pm|mp|times|cdot|approx|leq|geq|neq|infty|propto|degree)\b/g,
+        '$$\\$1$$'
+      ).replace(/\$\$(\\[a-zA-Z]+)\$\$/g, '$$1$');
+    })
+    .join('');
+}
+
 function MathText({ content }: { content: string }) {
-  const parts = (content || '').split(/(\$\$[^$]+\$\$|\$[^$]+\$)/g);
+  const normalized = useMemo(() => normalizeLatexText(content || ''), [content]);
+  const parts = normalized.split(/(\$\$[\s\S]*?\$\$|\$[^$]+\$)/g);
+
   return (
-    <div className="leading-relaxed text-slate-200 space-y-2">
+    <div className="leading-relaxed text-slate-200 space-y-2 whitespace-pre-line">
       {parts.map((part, idx) => {
         if (part.startsWith('$$') && part.endsWith('$$')) {
-          return <BlockMath key={idx} math={part.slice(2, -2)} />;
+          return (
+            <BlockMath
+              key={idx}
+              math={part.slice(2, -2).trim()}
+              renderError={() => <code className="text-amber-300 text-xs">{part}</code>}
+            />
+          );
         }
         if (part.startsWith('$') && part.endsWith('$')) {
-          return <InlineMath key={idx} math={part.slice(1, -1)} />;
+          return (
+            <InlineMath
+              key={idx}
+              math={part.slice(1, -1).trim()}
+              renderError={() => <code className="text-amber-300 text-xs">{part}</code>}
+            />
+          );
         }
         return <span key={idx}>{part}</span>;
       })}
