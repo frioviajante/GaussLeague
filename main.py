@@ -3,10 +3,14 @@ import random
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Literal, Optional
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlparse
+from urllib.request import Request, urlopen
 
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 import jwt
 from passlib.context import CryptContext
 import pint
@@ -42,6 +46,23 @@ DATABASE_URL = os.environ.get("DATABASE_URL")
 JWT_SECRET = os.environ.get("JWT_SECRET", "irodov-arena-dev-secret-key")
 JWT_ALGORITHM = "HS256"
 
+DEFAULT_PDF_DOMAINS = (
+    "olimpicos.net",
+    "noic.com.br",
+    "ipho-unofficial.org",
+    "eupho.ee",
+    "rmph.lbi.ro",
+    "r2.dev",
+    "supabase.co",
+    "githubusercontent.com",
+)
+ALLOWED_PDF_DOMAINS = tuple(
+    d.strip().lower()
+    for d in os.environ.get("ALLOWED_PDF_DOMAINS", ",".join(DEFAULT_PDF_DOMAINS)).split(",")
+    if d.strip()
+)
+MAX_PDF_BYTES = 25 * 1024 * 1024  # 25 MB
+
 ureg = pint.UnitRegistry()
 Q_ = ureg.Quantity
 
@@ -59,6 +80,9 @@ PHYSICS_LOCALS = {
             "Lambda", "Ei", "Si", "Ci", "Li", "lam",
         )
     },
+    "sin": sin,
+    "cos": cos,
+    "tan": tan,
     "sen": sin,
     "tg": tan,
     "arcsen": asin,
@@ -147,6 +171,17 @@ def get_current_user_id(authorization: str = Header(None)) -> str:
         return payload["sub"]
     except jwt.PyJWTError:
         raise HTTPException(status_code=401, detail="Sessão expirada. Faça login novamente.")
+
+
+def _is_allowed_pdf_url(raw_url: str) -> bool:
+    try:
+        parsed = urlparse(raw_url)
+    except Exception:
+        return False
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        return False
+    host = parsed.hostname.lower()
+    return any(host == d or host.endswith(f".{d}") for d in ALLOWED_PDF_DOMAINS)
 
 
 def _clean_expr(raw: str) -> str:
@@ -615,6 +650,77 @@ def list_olympiad_problems(olympiad_id: str, conn=Depends(get_db)):
             (olympiad_id,),
         )
         return cur.fetchall()
+
+
+@app.get("/olympiads/{olympiad_id}/papers")
+def list_olympiad_papers(olympiad_id: str, conn=Depends(get_db)):
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT id, olympiad_id, tab_order, tab_label, title, exam_pdf_url, solution_pdf_url
+            FROM olympiad_papers
+            WHERE olympiad_id = %s
+            ORDER BY tab_order ASC, created_at ASC
+            """,
+            (olympiad_id,),
+        )
+        return cur.fetchall()
+
+
+@app.get("/pdf-proxy")
+def proxy_pdf(url: str = Query(..., description="URL pública do PDF a ser exibido no iframe")):
+    clean_url = url.strip()
+    if not _is_allowed_pdf_url(clean_url):
+        raise HTTPException(
+            status_code=403,
+            detail="Domínio de PDF não autorizado no proxy. Adicione-o em ALLOWED_PDF_DOMAINS.",
+        )
+
+    req = Request(
+        clean_url,
+        headers={
+            "User-Agent": "Mozilla/5.0 (compatible; NOICLeaguePDFProxy/1.0)",
+            "Accept": "application/pdf,*/*;q=0.8",
+        },
+    )
+    try:
+        with urlopen(req, timeout=25) as resp:
+            content_length = resp.headers.get("Content-Length")
+            if content_length and content_length.isdigit() and int(content_length) > MAX_PDF_BYTES:
+                raise HTTPException(status_code=413, detail="PDF excede o limite máximo de 25 MB.")
+
+            chunks = []
+            total = 0
+            while True:
+                chunk = resp.read(65536)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > MAX_PDF_BYTES:
+                    raise HTTPException(status_code=413, detail="PDF excede o limite máximo de 25 MB.")
+                chunks.append(chunk)
+            pdf_bytes = b"".join(chunks)
+            content_type = (resp.headers.get("Content-Type") or "").lower()
+    except HTTPException:
+        raise
+    except HTTPError as e:
+        raise HTTPException(status_code=e.code, detail=f"Falha ao buscar PDF na origem (HTTP {e.code}).")
+    except URLError:
+        raise HTTPException(status_code=502, detail="Não foi possível conectar ao servidor do PDF.")
+    except TimeoutError:
+        raise HTTPException(status_code=504, detail="Tempo esgotado ao baixar o PDF.")
+
+    if not pdf_bytes.startswith(b"%PDF") and "application/pdf" not in content_type:
+        raise HTTPException(status_code=415, detail="O link informado não retornou um arquivo PDF válido.")
+
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": "inline",
+            "Cache-Control": "public, max-age=86400",
+        },
+    )
 
 
 @app.get("/problems/{problem_id}/editorial")
