@@ -24,6 +24,8 @@ import {
   Search,
   User,
   TrendingUp,
+  FileText,
+  ExternalLink,
 } from 'lucide-react';
 import noicLogo from './noic.png';
 
@@ -83,6 +85,16 @@ interface Olympiad {
   duration_minutes: number;
 }
 
+interface OlympiadPaper {
+  id: string;
+  olympiad_id: string;
+  tab_order: number;
+  tab_label: string;
+  title?: string | null;
+  exam_pdf_url: string;
+  solution_pdf_url?: string | null;
+}
+
 interface Problem {
   id: string;
   irodov_code: string;
@@ -106,14 +118,6 @@ interface Submission {
   submitted_answer: string;
   verdict: 'AC' | 'WA' | 'PE';
   created_at: string;
-}
-
-interface QuestionMeta {
-  groupKey: string;
-  groupLabel: string;
-  groupRank: number;
-  groupNum: number;
-  subLabel: string;
 }
 
 const RATING_PRESETS = [
@@ -188,67 +192,14 @@ function compareProblemCodes(a: string, b: string): number {
   return a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' });
 }
 
-function extractOlympiadQuestionMeta(code: string): QuestionMeta {
-  // Remove prefixo COMP-ANO- (ex: "IPhO-1979-") e eventual repetição (ex: "IPHO2006_")
-  const rest = (code || '')
-    .trim()
-    .replace(/^[A-Za-z]+-\d{4}-/, '')
-    .replace(/^[A-Za-z]+_?\d{4}[_-]+/i, '');
-
-  // Padrões: Q1-1.a, P3.2, T2.b, P4_2d
-  const mPrefixNum = rest.match(/^(?:Q|P|T)(\d+)(?:[-_.\s]+(.*))?$/i);
-  if (mPrefixNum) {
-    const num = Number(mPrefixNum[1]);
-    return {
-      groupKey: `Q${num}`,
-      groupLabel: `Questão ${num}`,
-      groupRank: 0,
-      groupNum: num,
-      subLabel: mPrefixNum[2] || rest,
-    };
+function buildPdfViewerUrl(rawUrl: string): string {
+  const clean = (rawUrl || '').trim();
+  if (!clean) return '';
+  // PDFs locais ou já servidos pela própria API abrem direto; links externos passam pelo proxy FastAPI
+  if (clean.startsWith('/') || clean.startsWith(API_URL)) {
+    return `${clean}#view=FitH`;
   }
-
-  // Padrões: 1.1, 1.a, 2.3b
-  const mNum = rest.match(/^(\d+)(?:[-_.\s]+(.*))?$/);
-  if (mNum) {
-    const num = Number(mNum[1]);
-    return {
-      groupKey: `Q${num}`,
-      groupLabel: `Questão ${num}`,
-      groupRank: 0,
-      groupNum: num,
-      subLabel: mNum[2] || rest,
-    };
-  }
-
-  // Padrões por letra: A.1, B.2, C1, D1
-  const mLetter = rest.match(/^([A-Z])(?:[-_.\s]*(.*))?$/);
-  if (mLetter) {
-    const letter = mLetter[1];
-    return {
-      groupKey: `L_${letter}`,
-      groupLabel: `Questão ${letter}`,
-      groupRank: 1,
-      groupNum: letter.charCodeAt(0),
-      subLabel: mLetter[2] ? `${letter}.${mLetter[2]}` : rest,
-    };
-  }
-
-  return {
-    groupKey: 'OTHER',
-    groupLabel: 'Geral',
-    groupRank: 2,
-    groupNum: 999,
-    subLabel: rest || code,
-  };
-}
-
-function compareOlympiadProblems(a: Problem, b: Problem): number {
-  const ma = extractOlympiadQuestionMeta(a.irodov_code);
-  const mb = extractOlympiadQuestionMeta(b.irodov_code);
-  if (ma.groupRank !== mb.groupRank) return ma.groupRank - mb.groupRank;
-  if (ma.groupNum !== mb.groupNum) return ma.groupNum - mb.groupNum;
-  return ma.subLabel.localeCompare(mb.subLabel, undefined, { numeric: true, sensitivity: 'base' });
+  return `${API_URL}/pdf-proxy?url=${encodeURIComponent(clean)}#view=FitH`;
 }
 
 function formatTimer(totalSeconds: number): string {
@@ -290,16 +241,13 @@ function toPreviewLatex(expr: string): string {
 function normalizeLatexText(raw: string): string {
   if (!raw) return '';
   const text = raw
-    // Converte \[ ... \] e \( ... \) para $$ ... $$ e $ ... $
     .replace(/\\\[([\s\S]*?)\\\]/g, (_, inner) => `$$${inner}$$`)
     .replace(/\\\(([\s\S]*?)\\\)/g, (_, inner) => `$${inner}$`)
-    // Corrige barra dupla antes de comandos LaTeX comuns (ex: \\mu -> \mu, \\frac -> \frac)
     .replace(
       /\\\\(?=(?:mu|nu|alpha|beta|gamma|delta|Delta|epsilon|varepsilon|zeta|eta|theta|vartheta|Theta|iota|kappa|lambda|Lambda|xi|pi|Pi|rho|sigma|Sigma|tau|phi|varphi|Phi|chi|psi|Psi|omega|Omega|frac|dfrac|sqrt|cdot|times|pm|mp|approx|leq|geq|neq|equiv|propto|infty|partial|nabla|vec|hat|bar|dot|ddot|sin|cos|tan|cot|sec|csc|ln|log|exp|text|mathrm|mathbf|left|right|sum|int|lim|to|rightarrow|degree)\b)/g,
       '\\'
     );
 
-  // Envolve comandos gregos/matemáticos (e eventuais sub/sobrescritos) que ficaram soltos fora de $...$
   const segments = text.split(/(\$\$[\s\S]*?\$\$|\$[^$]+\$)/g);
   return segments
     .map((seg) => {
@@ -544,12 +492,17 @@ export default function NoicLeaguePage() {
   const [profileError, setProfileError] = useState<string | null>(null);
   const [profileSearchInput, setProfileSearchInput] = useState('');
 
-  // Estados das Olimpíadas (modo Unrated)
+  // Estados das Olimpíadas (Modo PDF com abas por questão)
   const [olympiads, setOlympiads] = useState<Olympiad[]>([]);
   const [loadingOlympiads, setLoadingOlympiads] = useState(false);
   const [selectedCompetition, setSelectedCompetition] = useState<string | null>(null);
   const [activeOlympiad, setActiveOlympiad] = useState<Olympiad | null>(null);
-  const [selectedQuestionTab, setSelectedQuestionTab] = useState<string>('all');
+  const [olympiadPapers, setOlympiadPapers] = useState<OlympiadPaper[]>([]);
+  const [activePaperId, setActivePaperId] = useState<string | null>(null);
+  const [paperViewMode, setPaperViewMode] = useState<'exam' | 'solution'>('exam');
+  const [paperScores, setPaperScores] = useState<Record<string, string>>({});
+  const [loadingPapers, setLoadingPapers] = useState(false);
+  const [papersError, setPapersError] = useState<string | null>(null);
   const [timeLeftSeconds, setTimeLeftSeconds] = useState(0);
   const [timerRunning, setTimerRunning] = useState(false);
 
@@ -753,7 +706,9 @@ export default function NoicLeaguePage() {
 
   function openProblemFromTagList(prob: Problem) {
     setActiveOlympiad(null);
-    setSelectedQuestionTab('all');
+    setOlympiadPapers([]);
+    setActivePaperId(null);
+    setPaperViewMode('exam');
     setTimerRunning(false);
     setSelectedProblem(prob);
     setLastFeedback(null);
@@ -775,43 +730,72 @@ export default function NoicLeaguePage() {
   }
 
   async function startOlympiadSimulation(oly: Olympiad) {
-    setLoadingData(true);
+    setLoadingPapers(true);
+    setPapersError(null);
     setActiveOlympiad(oly);
+    setOlympiadPapers([]);
+    setActivePaperId(null);
+    setPaperViewMode('exam');
     setTimeLeftSeconds((oly.duration_minutes || 300) * 60);
     setTimerRunning(true);
     setActiveTab('problem');
     setLastFeedback(null);
     setAnswerInput('');
 
+    // Carrega notas salvas localmente para esta edição
     try {
-      const res = await fetch(`${API_URL}/olympiads/${oly.id}/problems`);
-      if (res.ok) {
-        const rawData: Problem[] = await res.json();
-        const data = [...rawData].sort(compareOlympiadProblems);
-        setProblems(data);
-        if (data.length > 0) {
-          const firstMeta = extractOlympiadQuestionMeta(data[0].irodov_code);
-          setSelectedQuestionTab(firstMeta.groupKey);
-          setSelectedProblem(data[0]);
-        } else {
-          setSelectedQuestionTab('all');
-          setSelectedProblem(null);
-        }
-      }
-    } finally {
-      setLoadingData(false);
+      const savedScores = localStorage.getItem(`noic_oly_scores_${oly.id}`);
+      setPaperScores(savedScores ? JSON.parse(savedScores) : {});
+    } catch {
+      setPaperScores({});
     }
+
+    try {
+      const res = await fetch(`${API_URL}/olympiads/${oly.id}/papers`);
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.detail || 'Não foi possível carregar os PDFs desta olimpíada.');
+      }
+      const rawPapers: OlympiadPaper[] = await res.json();
+      const sorted = [...rawPapers].sort((a, b) => a.tab_order - b.tab_order);
+      setOlympiadPapers(sorted);
+      setActivePaperId(sorted.length > 0 ? sorted[0].id : null);
+    } catch (err: any) {
+      setPapersError(err.message || 'Erro ao carregar os PDFs desta prova.');
+    } finally {
+      setLoadingPapers(false);
+    }
+  }
+
+  function updatePaperScore(paperId: string, rawValue: string) {
+    if (!activeOlympiad) return;
+    if (rawValue !== '') {
+      const num = Number(rawValue);
+      if (Number.isNaN(num) || num < 0 || num > 10) return;
+    }
+    setPaperScores((prev) => {
+      const next = { ...prev, [paperId]: rawValue };
+      try {
+        localStorage.setItem(`noic_oly_scores_${activeOlympiad.id}`, JSON.stringify(next));
+      } catch {}
+      return next;
+    });
   }
 
   function exitOlympiadSimulation(goToTab: 'olympiads' | 'problem' = 'olympiads') {
     setActiveOlympiad(null);
-    setSelectedQuestionTab('all');
+    setOlympiadPapers([]);
+    setActivePaperId(null);
+    setPaperViewMode('exam');
+    setPapersError(null);
     setTimerRunning(false);
     setTimeLeftSeconds(0);
     setLastFeedback(null);
     setAnswerInput('');
     setActiveTab(goToTab);
-    fetchProblems(selectedSource, true);
+    if (goToTab === 'problem') {
+      fetchProblems(selectedSource, true);
+    }
   }
 
   async function fetchUserSubmissions(authToken: string) {
@@ -835,6 +819,9 @@ export default function NoicLeaguePage() {
   }
 
   async function openEditorialTab() {
+    if (activeOlympiad) {
+      exitOlympiadSimulation('problem');
+    }
     setActiveTab('editorial');
     setEditorialContent(null);
     setEditorialError(null);
@@ -911,7 +898,7 @@ export default function NoicLeaguePage() {
     setLastFeedback(null);
     const oldRating = user.rating;
     const isUnrated = Boolean(
-      activeOlympiad || selectedProblem.olympiad_id || selectedProblem.answer_type === 'self_graded'
+      selectedProblem.olympiad_id || selectedProblem.answer_type === 'self_graded'
     );
 
     try {
@@ -956,11 +943,11 @@ export default function NoicLeaguePage() {
         unrated: isUnrated,
       });
 
-      const refreshTasks: Promise<void>[] = [fetchUserSubmissions(token), fetchLeaderboard()];
-      if (!activeOlympiad) {
-        refreshTasks.push(fetchProblems(selectedSource, false));
-      }
-      await Promise.all(refreshTasks);
+      await Promise.all([
+        fetchUserSubmissions(token),
+        fetchLeaderboard(),
+        fetchProblems(selectedSource, false),
+      ]);
       if (isAC) setAnswerInput('');
     } catch (err: any) {
       setLastFeedback({ verdict: 'WA', message: err.message });
@@ -1047,51 +1034,27 @@ export default function NoicLeaguePage() {
     });
   }, [tagProblems, tagStatusFilter, solvedProblemIds]);
 
-  const olympiadSolvedCount = useMemo(() => {
-    if (!activeOlympiad) return 0;
-    return problems.filter((p) => solvedProblemIds.has(p.id)).length;
-  }, [activeOlympiad, problems, solvedProblemIds]);
+  const activePaper = useMemo(() => {
+    if (!olympiadPapers.length) return null;
+    return olympiadPapers.find((p) => p.id === activePaperId) || olympiadPapers[0];
+  }, [olympiadPapers, activePaperId]);
 
-  const olympiadQuestionGroups = useMemo(() => {
-    if (!activeOlympiad) return [];
-    const map = new Map<
-      string,
-      { key: string; label: string; rank: number; num: number; items: Problem[] }
-    >();
+  const totalOlympiadScore = useMemo(() => {
+    return olympiadPapers.reduce((acc, paper) => {
+      const val = parseFloat(paperScores[paper.id] || '');
+      return Number.isNaN(val) ? acc : acc + val;
+    }, 0);
+  }, [olympiadPapers, paperScores]);
 
-    for (const prob of problems) {
-      const meta = extractOlympiadQuestionMeta(prob.irodov_code);
-      const existing = map.get(meta.groupKey);
-      if (existing) {
-        existing.items.push(prob);
-      } else {
-        map.set(meta.groupKey, {
-          key: meta.groupKey,
-          label: meta.groupLabel,
-          rank: meta.groupRank,
-          num: meta.groupNum,
-          items: [prob],
-        });
-      }
+  const maxOlympiadScore = olympiadPapers.length * 10;
+
+  const activeRawPdfUrl = useMemo(() => {
+    if (!activePaper) return '';
+    if (paperViewMode === 'solution' && activePaper.solution_pdf_url) {
+      return activePaper.solution_pdf_url;
     }
-
-    return Array.from(map.values()).sort((a, b) =>
-      a.rank !== b.rank ? a.rank - b.rank : a.num - b.num
-    );
-  }, [activeOlympiad, problems]);
-
-  const displayedProblems = useMemo(() => {
-    if (!activeOlympiad || selectedQuestionTab === 'all') return problems;
-    const found = olympiadQuestionGroups.find((g) => g.key === selectedQuestionTab);
-    return found ? found.items : problems;
-  }, [activeOlympiad, selectedQuestionTab, olympiadQuestionGroups, problems]);
-
-  const activeQuestionGroupLabel = useMemo(() => {
-    if (!activeOlympiad) return null;
-    if (selectedQuestionTab === 'all') return activeOlympiad.title;
-    const found = olympiadQuestionGroups.find((g) => g.key === selectedQuestionTab);
-    return found ? `${activeOlympiad.competition} ${activeOlympiad.year} — ${found.label}` : activeOlympiad.title;
-  }, [activeOlympiad, selectedQuestionTab, olympiadQuestionGroups]);
+    return activePaper.exam_pdf_url;
+  }, [activePaper, paperViewMode]);
 
   const filteredOlympiads = useMemo(() => {
     if (!selectedCompetition) return [];
@@ -1102,11 +1065,9 @@ export default function NoicLeaguePage() {
 
   const rank = getRankInfo(user?.rating ?? 1200);
   const currentProblemIsUnrated = Boolean(
-    activeOlympiad || selectedProblem?.olympiad_id || selectedProblem?.answer_type === 'self_graded'
+    selectedProblem?.olympiad_id || selectedProblem?.answer_type === 'self_graded'
   );
-  const sourceLabel = activeOlympiad
-    ? activeOlympiad.competition
-    : selectedProblem?.source
+  const sourceLabel = selectedProblem?.source
     ? selectedProblem.source.toUpperCase()
     : selectedSource === 'noic'
     ? 'NOIC'
@@ -1259,7 +1220,6 @@ export default function NoicLeaguePage() {
                 </button>
               </div>
 
-              {/* Busca por texto + Faixa de Rating */}
               <form
                 onSubmit={(e) => {
                   e.preventDefault();
@@ -1328,7 +1288,6 @@ export default function NoicLeaguePage() {
                 </div>
               </form>
 
-              {/* Atalhos rápidos de faixa de Rating */}
               <div className="flex flex-wrap items-center gap-1.5">
                 <span className="text-xs text-slate-500 mr-1">Faixa de rating:</span>
                 {RATING_PRESETS.map((preset) => {
@@ -1350,7 +1309,6 @@ export default function NoicLeaguePage() {
                 })}
               </div>
 
-              {/* Filtros de Fonte e Status */}
               <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-800 pt-4">
                 <div className="flex flex-wrap items-center gap-1.5">
                   {[
@@ -1396,7 +1354,6 @@ export default function NoicLeaguePage() {
                 </div>
               </div>
 
-              {/* Pills de Tags Unificadas */}
               <div className="flex flex-wrap gap-2">
                 <button
                   type="button"
@@ -1427,7 +1384,6 @@ export default function NoicLeaguePage() {
               </div>
             </div>
 
-            {/* Tabela de Resultados */}
             <div className="bg-[#111827] border border-slate-800 rounded-xl overflow-hidden">
               <div className="px-6 py-3.5 border-b border-slate-800 flex items-center justify-between text-xs text-slate-400">
                 <span>
@@ -1744,7 +1700,7 @@ export default function NoicLeaguePage() {
                   </span>
                 </div>
                 <p className="text-sm text-slate-400 mt-1">
-                  Escolha uma competição para simular provas antigas com cronômetro e correção automática via SymPy, sem alterar seu PhysElo global.
+                  Simule provas teóricas originais em PDF organizadas em abas por questão, com cronômetro, gabarito oficial e auto-pontuação.
                 </p>
               </div>
 
@@ -1794,7 +1750,7 @@ export default function NoicLeaguePage() {
                             </span>
                           </div>
                           <h3 className="font-bold text-white text-base">{oly.title}</h3>
-                          <p className="text-xs text-slate-400 mt-1">Simulado virtual • Não altera o PhysElo global</p>
+                          <p className="text-xs text-slate-400 mt-1">PDFs originais em abas • Não altera o PhysElo global</p>
                         </div>
 
                         <button
@@ -1926,84 +1882,92 @@ export default function NoicLeaguePage() {
               </table>
             </div>
           </div>
-        ) : (
-          <div className="space-y-6">
-            {activeOlympiad && (
-              <div className="bg-[#111827] border border-amber-500/30 rounded-xl px-5 py-4 flex flex-wrap items-center justify-between gap-4">
-                <div className="flex items-center gap-3">
-                  <button
-                    type="button"
-                    onClick={() => exitOlympiadSimulation('olympiads')}
-                    className="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition"
-                    title="Sair do simulado"
-                  >
-                    <ArrowLeft className="w-4 h-4" />
-                  </button>
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <span className="font-bold text-white text-base">{activeOlympiad.title}</span>
-                      <span className="px-2 py-0.5 rounded text-[11px] font-mono font-semibold bg-amber-500/15 text-amber-300 border border-amber-500/30">
-                        UNRATED
-                      </span>
-                    </div>
-                    <p className="text-xs text-slate-400">
-                      Progresso: <strong className="text-emerald-400">{olympiadSolvedCount}</strong> / {problems.length} itens resolvidos
-                    </p>
+        ) : activeOlympiad ? (
+          /* ================= MODO SIMULADOR DE OLIMPÍADA EM PDF ================= */
+          <div className="space-y-5">
+            {/* Cabeçalho da prova + Cronômetro */}
+            <div className="bg-[#111827] border border-amber-500/30 rounded-xl px-5 py-4 flex flex-wrap items-center justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => exitOlympiadSimulation('olympiads')}
+                  className="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition"
+                  title="Sair do simulado"
+                >
+                  <ArrowLeft className="w-4 h-4" />
+                </button>
+                <div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="font-bold text-white text-base">{activeOlympiad.title}</span>
+                    <span className="px-2 py-0.5 rounded text-[11px] font-mono font-semibold bg-amber-500/15 text-amber-300 border border-amber-500/30">
+                      UNRATED
+                    </span>
                   </div>
-                </div>
-
-                <div className="flex items-center gap-2.5">
-                  <div
-                    className={`px-3.5 py-1.5 rounded-lg font-mono text-base font-bold border ${
-                      timeLeftSeconds < 600
-                        ? 'bg-rose-500/15 text-rose-400 border-rose-500/30'
-                        : 'bg-[#0b0f19] text-amber-300 border-slate-700'
-                    }`}
-                  >
-                    {formatTimer(timeLeftSeconds)}
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setTimerRunning((prev) => !prev)}
-                    className="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 transition"
-                    title={timerRunning ? 'Pausar cronômetro' : 'Retomar cronômetro'}
-                  >
-                    {timerRunning ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setTimerRunning(false);
-                      setTimeLeftSeconds((activeOlympiad.duration_minutes || 300) * 60);
-                    }}
-                    className="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 transition"
-                    title="Reiniciar cronômetro"
-                  >
-                    <RotateCcw className="w-4 h-4" />
-                  </button>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    {olympiadPapers.length} caderno(s) em PDF
+                    {maxOlympiadScore > 0 && (
+                      <>
+                        {' '}
+                        • Auto-pontuação:{' '}
+                        <strong className="text-emerald-400 font-mono">
+                          {Number.isInteger(totalOlympiadScore)
+                            ? totalOlympiadScore
+                            : totalOlympiadScore.toFixed(1)}{' '}
+                          / {maxOlympiadScore} pts
+                        </strong>
+                      </>
+                    )}
+                  </p>
                 </div>
               </div>
-            )}
 
-            {activeOlympiad && olympiadQuestionGroups.length > 0 && (
+              <div className="flex items-center gap-2.5">
+                <div
+                  className={`px-3.5 py-1.5 rounded-lg font-mono text-base font-bold border ${
+                    timeLeftSeconds < 600
+                      ? 'bg-rose-500/15 text-rose-400 border-rose-500/30'
+                      : 'bg-[#0b0f19] text-amber-300 border-slate-700'
+                  }`}
+                >
+                  {formatTimer(timeLeftSeconds)}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setTimerRunning((prev) => !prev)}
+                  className="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 transition"
+                  title={timerRunning ? 'Pausar cronômetro' : 'Retomar cronômetro'}
+                >
+                  {timerRunning ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setTimerRunning(false);
+                    setTimeLeftSeconds((activeOlympiad.duration_minutes || 300) * 60);
+                  }}
+                  className="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 transition"
+                  title="Reiniciar cronômetro"
+                >
+                  <RotateCcw className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+
+            {/* Abas por questão (cada aba = 1 PDF) */}
+            {olympiadPapers.length > 0 && (
               <div className="flex flex-wrap items-center gap-2 bg-[#111827] border border-slate-800 rounded-xl p-2.5">
-                {olympiadQuestionGroups.map((group) => {
-                  const solvedInGroup = group.items.filter((p) => solvedProblemIds.has(p.id)).length;
-                  const allDone = solvedInGroup === group.items.length && group.items.length > 0;
-                  const isActive = selectedQuestionTab === group.key;
+                {olympiadPapers.map((paper) => {
+                  const isActive = activePaper?.id === paper.id;
+                  const savedScore = paperScores[paper.id];
+                  const hasScore = savedScore !== undefined && savedScore !== '';
 
                   return (
                     <button
-                      key={group.key}
+                      key={paper.id}
                       type="button"
                       onClick={() => {
-                        setSelectedQuestionTab(group.key);
-                        setActiveTab('problem');
-                        setLastFeedback(null);
-                        setAnswerInput('');
-                        if (group.items.length > 0) {
-                          setSelectedProblem(group.items[0]);
-                        }
+                        setActivePaperId(paper.id);
+                        setPaperViewMode('exam');
                       }}
                       className={`px-3.5 py-2 rounded-lg text-xs font-semibold transition flex items-center gap-2 border ${
                         isActive
@@ -2011,34 +1975,127 @@ export default function NoicLeaguePage() {
                           : 'bg-[#0b0f19] text-slate-300 border-slate-800 hover:border-slate-600 hover:text-white'
                       }`}
                     >
-                      <span>{group.label}</span>
-                      <span
-                        className={`px-1.5 py-0.5 rounded font-mono text-[10px] ${
-                          allDone
-                            ? 'bg-emerald-500/20 text-emerald-300'
-                            : 'bg-slate-800 text-slate-400'
-                        }`}
-                      >
-                        {solvedInGroup}/{group.items.length}
-                      </span>
+                      <FileText className="w-3.5 h-3.5" />
+                      <span>{paper.tab_label}</span>
+                      {hasScore && (
+                        <span className="px-1.5 py-0.5 rounded font-mono text-[10px] bg-emerald-500/20 text-emerald-300">
+                          {savedScore}/10
+                        </span>
+                      )}
                     </button>
                   );
                 })}
-
-                <button
-                  type="button"
-                  onClick={() => setSelectedQuestionTab('all')}
-                  className={`ml-auto px-3 py-2 rounded-lg text-xs font-medium transition border ${
-                    selectedQuestionTab === 'all'
-                      ? 'bg-slate-700 text-white border-slate-600'
-                      : 'bg-[#0b0f19] text-slate-400 border-slate-800 hover:text-white'
-                  }`}
-                >
-                  Todas ({problems.length})
-                </button>
               </div>
             )}
 
+            {/* Visualizador de PDF */}
+            {loadingPapers ? (
+              <div className="bg-[#111827] border border-slate-800 rounded-xl p-12 text-center text-slate-400">
+                Carregando PDFs de {activeOlympiad.title}...
+              </div>
+            ) : papersError ? (
+              <div className="bg-[#111827] border border-rose-500/30 rounded-xl p-8 text-center text-rose-300 text-sm space-y-2">
+                <AlertCircle className="w-6 h-6 mx-auto text-rose-400" />
+                <p>{papersError}</p>
+              </div>
+            ) : !activePaper ? (
+              <div className="bg-[#111827] border border-slate-800 rounded-xl p-12 text-center text-slate-400 text-sm">
+                Nenhum PDF cadastrado para <strong className="text-white">{activeOlympiad.title}</strong> na tabela{' '}
+                <code className="text-indigo-400">olympiad_papers</code>.
+              </div>
+            ) : (
+              <div className="bg-[#111827] border border-slate-800 rounded-xl overflow-hidden">
+                {/* Barra de controles do PDF */}
+                <div className="px-4 py-3 border-b border-slate-800 bg-slate-900/60 flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="px-2 py-0.5 rounded text-xs font-mono font-bold bg-indigo-500/15 text-indigo-300 border border-indigo-500/30 shrink-0">
+                      {activePaper.tab_label}
+                    </span>
+                    {activePaper.title && (
+                      <span className="text-sm font-semibold text-white truncate">{activePaper.title}</span>
+                    )}
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2.5">
+                    {/* Toggle Enunciado / Solução Oficial */}
+                    <div className="inline-flex rounded-lg bg-[#0b0f19] p-1 border border-slate-800">
+                      <button
+                        type="button"
+                        onClick={() => setPaperViewMode('exam')}
+                        className={`px-3 py-1 rounded-md text-xs font-semibold transition flex items-center gap-1.5 ${
+                          paperViewMode === 'exam'
+                            ? 'bg-indigo-600 text-white'
+                            : 'text-slate-400 hover:text-white'
+                        }`}
+                      >
+                        <FileText className="w-3.5 h-3.5" /> Enunciado
+                      </button>
+                      <button
+                        type="button"
+                        disabled={!activePaper.solution_pdf_url}
+                        onClick={() => setPaperViewMode('solution')}
+                        className={`px-3 py-1 rounded-md text-xs font-semibold transition flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed ${
+                          paperViewMode === 'solution'
+                            ? 'bg-emerald-600 text-white'
+                            : 'text-slate-400 hover:text-white'
+                        }`}
+                        title={
+                          activePaper.solution_pdf_url
+                            ? 'Revelar solução oficial em PDF'
+                            : 'Solução oficial não disponível para este item'
+                        }
+                      >
+                        <BookOpen className="w-3.5 h-3.5" /> Solução Oficial
+                      </button>
+                    </div>
+
+                    {/* Auto-nota 0 a 10 */}
+                    <div className="flex items-center gap-1.5 bg-[#0b0f19] border border-slate-800 rounded-lg px-2.5 py-1">
+                      <label className="text-[11px] text-slate-400 whitespace-nowrap">Minha nota:</label>
+                      <input
+                        type="number"
+                        min={0}
+                        max={10}
+                        step={0.5}
+                        value={paperScores[activePaper.id] ?? ''}
+                        onChange={(e) => updatePaperScore(activePaper.id, e.target.value)}
+                        placeholder="0–10"
+                        className="w-14 bg-transparent text-xs font-mono text-emerald-300 focus:outline-none text-right"
+                      />
+                      <span className="text-[11px] font-mono text-slate-500">/10</span>
+                    </div>
+
+                    {/* Fallback para mobile / nova aba */}
+                    {activeRawPdfUrl && (
+                      <a
+                        href={activeRawPdfUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-medium text-slate-200 transition flex items-center gap-1.5"
+                      >
+                        <ExternalLink className="w-3.5 h-3.5" /> Nova aba
+                      </a>
+                    )}
+                  </div>
+                </div>
+
+                {/* Iframe do PDF */}
+                <div className="bg-[#0b0f19] p-2 sm:p-3">
+                  <iframe
+                    key={`${activePaper.id}-${paperViewMode}`}
+                    src={buildPdfViewerUrl(activeRawPdfUrl)}
+                    title={`${activeOlympiad.title} — ${activePaper.tab_label} (${
+                      paperViewMode === 'solution' ? 'Solução' : 'Enunciado'
+                    })`}
+                    className="w-full h-[78vh] min-h-[580px] rounded-lg border border-slate-800 bg-slate-950"
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+        ) : (
+          /* ================= MODO PROBLEMAS (IRODOV / NOIC) ================= */
+          <div className="space-y-6">
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
               <div className="lg:col-span-8 space-y-6">
                 {loadingData ? (
@@ -2047,9 +2104,7 @@ export default function NoicLeaguePage() {
                   </div>
                 ) : !selectedProblem ? (
                   <div className="bg-[#111827] border border-slate-800 rounded-xl p-12 text-center text-slate-400">
-                    {activeOlympiad ? (
-                      <>Nenhuma questão encontrada para <strong className="text-white">{activeOlympiad.title}</strong>.</>
-                    ) : selectedSource === 'noic' ? (
+                    {selectedSource === 'noic' ? (
                       <>
                         Nenhuma questão encontrada no acervo <strong className="text-indigo-400">NOIC</strong>. Rode o script <code className="text-indigo-400">seed_noic.py</code> para popular este banco.
                       </>
@@ -2367,54 +2422,44 @@ export default function NoicLeaguePage() {
 
               <div className="lg:col-span-4 space-y-6">
                 <div className="bg-[#111827] border border-slate-800 rounded-xl overflow-hidden">
-                  {!activeOlympiad && (
-                    <div className="p-2 bg-slate-900/80 border-b border-slate-800 grid grid-cols-2 gap-1.5">
-                      <button
-                        type="button"
-                        onClick={() => setSelectedSource('irodov')}
-                        className={`py-1.5 px-3 rounded-lg text-xs font-semibold transition ${
-                          selectedSource === 'irodov'
-                            ? 'bg-indigo-600 text-white shadow'
-                            : 'text-slate-400 hover:text-white hover:bg-slate-800'
-                        }`}
-                      >
-                        Acervo Irodov
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setSelectedSource('noic')}
-                        className={`py-1.5 px-3 rounded-lg text-xs font-semibold transition ${
-                          selectedSource === 'noic'
-                            ? 'bg-emerald-600 text-white shadow'
-                            : 'text-slate-400 hover:text-white hover:bg-slate-800'
-                        }`}
-                      >
-                        Acervo NOIC
-                      </button>
-                    </div>
-                  )}
+                  <div className="p-2 bg-slate-900/80 border-b border-slate-800 grid grid-cols-2 gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedSource('irodov')}
+                      className={`py-1.5 px-3 rounded-lg text-xs font-semibold transition ${
+                        selectedSource === 'irodov'
+                          ? 'bg-indigo-600 text-white shadow'
+                          : 'text-slate-400 hover:text-white hover:bg-slate-800'
+                      }`}
+                    >
+                      Acervo Irodov
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedSource('noic')}
+                      className={`py-1.5 px-3 rounded-lg text-xs font-semibold transition ${
+                        selectedSource === 'noic'
+                          ? 'bg-emerald-600 text-white shadow'
+                          : 'text-slate-400 hover:text-white hover:bg-slate-800'
+                      }`}
+                    >
+                      Acervo NOIC
+                    </button>
+                  </div>
 
                   <div className="px-4 py-3 border-b border-slate-800 flex items-center justify-between gap-2">
                     <span className="text-sm font-bold text-white flex items-center gap-2 truncate">
                       <BarChart3
                         className={`w-4 h-4 shrink-0 ${
-                          activeOlympiad
-                            ? 'text-amber-400'
-                            : selectedSource === 'noic'
-                            ? 'text-emerald-400'
-                            : 'text-indigo-400'
+                          selectedSource === 'noic' ? 'text-emerald-400' : 'text-indigo-400'
                         }`}
                       />
-                      <span className="truncate">
-                        {activeOlympiad
-                          ? activeQuestionGroupLabel || activeOlympiad.title
-                          : `Acervo ${selectedSource === 'noic' ? 'NOIC' : 'Irodov'}`}
-                      </span>
+                      <span className="truncate">Acervo {selectedSource === 'noic' ? 'NOIC' : 'Irodov'}</span>
                     </span>
-                    <span className="text-xs text-slate-400 shrink-0">{displayedProblems.length} itens</span>
+                    <span className="text-xs text-slate-400 shrink-0">{problems.length} itens</span>
                   </div>
                   <div className="divide-y divide-slate-800/70 max-h-80 overflow-y-auto">
-                    {displayedProblems.map((prob) => {
+                    {problems.map((prob) => {
                       const isSelected = selectedProblem?.id === prob.id;
                       const isSolved = solvedProblemIds.has(prob.id);
                       return (
@@ -2427,9 +2472,7 @@ export default function NoicLeaguePage() {
                           }}
                           className={`w-full px-4 py-3 text-left flex items-center justify-between transition ${
                             isSelected
-                              ? activeOlympiad
-                                ? 'bg-amber-500/15'
-                                : selectedSource === 'noic'
+                              ? selectedSource === 'noic'
                                 ? 'bg-emerald-600/15'
                                 : 'bg-indigo-600/15'
                               : 'hover:bg-slate-800/40'
@@ -2444,11 +2487,7 @@ export default function NoicLeaguePage() {
                             <div className="truncate">
                               <div
                                 className={`text-xs font-mono ${
-                                  activeOlympiad
-                                    ? 'text-amber-400'
-                                    : selectedSource === 'noic'
-                                    ? 'text-emerald-400'
-                                    : 'text-indigo-400'
+                                  selectedSource === 'noic' ? 'text-emerald-400' : 'text-indigo-400'
                                 }`}
                               >
                                 {prob.irodov_code}
