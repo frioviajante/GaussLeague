@@ -130,6 +130,7 @@ const RATING_PRESETS = [
 ];
 
 const OLYMPIAD_CATALOG = [
+  // Internacionais & Regionais
   {
     code: 'IPhO',
     name: 'International Physics Olympiad',
@@ -155,16 +156,95 @@ const OLYMPIAD_CATALOG = [
     badge: 'text-purple-400 border-purple-500/30 bg-purple-500/10',
   },
   {
+    code: 'NBPhO',
+    name: 'Nordic-Baltic Physics Olympiad',
+    duration: '5h',
+    badge: 'text-sky-400 border-sky-500/30 bg-sky-500/10',
+  },
+  {
+    code: 'OIbF',
+    name: 'Olimpíada Ibero-Americana de Física',
+    duration: '5h',
+    badge: 'text-lime-400 border-lime-500/30 bg-lime-500/10',
+  },
+  {
+    code: 'WoPhO',
+    name: 'World Physics Olympiad',
+    duration: '5h',
+    badge: 'text-fuchsia-400 border-fuchsia-500/30 bg-fuchsia-500/10',
+  },
+  {
+    code: 'GPhO',
+    name: 'Gulf Physics Olympiad',
+    duration: '5h',
+    badge: 'text-orange-400 border-orange-500/30 bg-orange-500/10',
+  },
+  {
+    code: 'IZhO',
+    name: 'International Zhautykov Olympiad',
+    duration: '5h',
+    badge: 'text-teal-400 border-teal-500/30 bg-teal-500/10',
+  },
+  {
+    code: 'ISPhO',
+    name: 'International Scientific Physics Olympiad',
+    duration: '5h',
+    badge: 'text-violet-400 border-violet-500/30 bg-violet-500/10',
+  },
+  {
     code: 'BIOPh',
     name: 'Brazilian International Olympiad of Physics',
     duration: '4h',
     badge: 'text-cyan-400 border-cyan-500/30 bg-cyan-500/10',
   },
+  // Nacionais & Seletivas
   {
     code: 'OBF',
-    name: 'Olimpíada Brasileira de Física',
+    name: 'Olimpíada Brasileira de Física (3ª Fase N3)',
     duration: '4h',
     badge: 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10',
+  },
+  {
+    code: 'SOIF',
+    name: 'Seletiva Brasileira para Olimpíadas Internacionais',
+    duration: '5h',
+    badge: 'text-green-400 border-green-500/30 bg-green-500/10',
+  },
+  {
+    code: 'USAPhO',
+    name: 'USA Physics Olympiad',
+    duration: '3h',
+    badge: 'text-indigo-400 border-indigo-500/30 bg-indigo-500/10',
+  },
+  {
+    code: 'USA TST',
+    name: 'USA Physics Team Selection Test',
+    duration: '4h',
+    badge: 'text-blue-300 border-blue-400/30 bg-blue-400/10',
+  },
+  {
+    code: 'CPhO',
+    name: 'Chinese Physics Olympiad (Finals)',
+    duration: '3h',
+    badge: 'text-red-400 border-red-500/30 bg-red-500/10',
+  },
+  {
+    code: 'VsOSh',
+    name: 'All-Russian Physics Olympiad (VsOSh)',
+    duration: '5h',
+    badge: 'text-pink-400 border-pink-500/30 bg-pink-500/10',
+  },
+  {
+    code: 'Russia TST',
+    name: 'Russian IPhO Team Selection Test',
+    duration: '5h',
+    badge: 'text-rose-300 border-rose-400/30 bg-rose-400/10',
+  },
+  {
+    code: 'BPhO',
+    name: 'British Physics Olympiad',
+    duration: '3h',
+    badge: 'text-yellow-400 border-yellow-500/30 bg-yellow-500/10',
   },
 ];
 
