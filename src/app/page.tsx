@@ -108,6 +108,14 @@ interface Submission {
   created_at: string;
 }
 
+interface QuestionMeta {
+  groupKey: string;
+  groupLabel: string;
+  groupRank: number;
+  groupNum: number;
+  subLabel: string;
+}
+
 const RATING_PRESETS = [
   { label: 'Qualquer', min: '', max: '' },
   { label: '≤ 1400', min: '', max: '1400' },
@@ -180,6 +188,69 @@ function compareProblemCodes(a: string, b: string): number {
   return a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' });
 }
 
+function extractOlympiadQuestionMeta(code: string): QuestionMeta {
+  // Remove prefixo COMP-ANO- (ex: "IPhO-1979-") e eventual repetição (ex: "IPHO2006_")
+  const rest = (code || '')
+    .trim()
+    .replace(/^[A-Za-z]+-\d{4}-/, '')
+    .replace(/^[A-Za-z]+_?\d{4}[_-]+/i, '');
+
+  // Padrões: Q1-1.a, P3.2, T2.b, P4_2d
+  const mPrefixNum = rest.match(/^(?:Q|P|T)(\d+)(?:[-_.\s]+(.*))?$/i);
+  if (mPrefixNum) {
+    const num = Number(mPrefixNum[1]);
+    return {
+      groupKey: `Q${num}`,
+      groupLabel: `Questão ${num}`,
+      groupRank: 0,
+      groupNum: num,
+      subLabel: mPrefixNum[2] || rest,
+    };
+  }
+
+  // Padrões: 1.1, 1.a, 2.3b
+  const mNum = rest.match(/^(\d+)(?:[-_.\s]+(.*))?$/);
+  if (mNum) {
+    const num = Number(mNum[1]);
+    return {
+      groupKey: `Q${num}`,
+      groupLabel: `Questão ${num}`,
+      groupRank: 0,
+      groupNum: num,
+      subLabel: mNum[2] || rest,
+    };
+  }
+
+  // Padrões por letra: A.1, B.2, C1, D1
+  const mLetter = rest.match(/^([A-Z])(?:[-_.\s]*(.*))?$/);
+  if (mLetter) {
+    const letter = mLetter[1];
+    return {
+      groupKey: `L_${letter}`,
+      groupLabel: `Questão ${letter}`,
+      groupRank: 1,
+      groupNum: letter.charCodeAt(0),
+      subLabel: mLetter[2] ? `${letter}.${mLetter[2]}` : rest,
+    };
+  }
+
+  return {
+    groupKey: 'OTHER',
+    groupLabel: 'Geral',
+    groupRank: 2,
+    groupNum: 999,
+    subLabel: rest || code,
+  };
+}
+
+function compareOlympiadProblems(a: Problem, b: Problem): number {
+  const ma = extractOlympiadQuestionMeta(a.irodov_code);
+  const mb = extractOlympiadQuestionMeta(b.irodov_code);
+  if (ma.groupRank !== mb.groupRank) return ma.groupRank - mb.groupRank;
+  if (ma.groupNum !== mb.groupNum) return ma.groupNum - mb.groupNum;
+  return ma.subLabel.localeCompare(mb.subLabel, undefined, { numeric: true, sensitivity: 'base' });
+}
+
 function formatTimer(totalSeconds: number): string {
   const hrs = Math.floor(totalSeconds / 3600);
   const mins = Math.floor((totalSeconds % 3600) / 60);
@@ -218,7 +289,7 @@ function toPreviewLatex(expr: string): string {
 
 function normalizeLatexText(raw: string): string {
   if (!raw) return '';
-  let text = raw
+  const text = raw
     // Converte \[ ... \] e \( ... \) para $$ ... $$ e $ ... $
     .replace(/\\\[([\s\S]*?)\\\]/g, (_, inner) => `$$${inner}$$`)
     .replace(/\\\(([\s\S]*?)\\\)/g, (_, inner) => `$${inner}$`)
@@ -228,7 +299,7 @@ function normalizeLatexText(raw: string): string {
       '\\'
     );
 
-  // Envolve comandos gregos/matemáticos que ficaram soltos fora de $...$
+  // Envolve comandos gregos/matemáticos (e eventuais sub/sobrescritos) que ficaram soltos fora de $...$
   const segments = text.split(/(\$\$[\s\S]*?\$\$|\$[^$]+\$)/g);
   return segments
     .map((seg) => {
@@ -236,9 +307,9 @@ function normalizeLatexText(raw: string): string {
         return seg;
       }
       return seg.replace(
-        /\\(mu|nu|alpha|beta|gamma|delta|Delta|epsilon|varepsilon|zeta|eta|theta|vartheta|Theta|lambda|Lambda|pi|Pi|rho|sigma|Sigma|tau|phi|varphi|Phi|chi|psi|Psi|omega|Omega|pm|mp|times|cdot|approx|leq|geq|neq|infty|propto|degree)\b/g,
-        '$$\\$1$$'
-      ).replace(/\$\$(\\[a-zA-Z]+)\$\$/g, '$$1$');
+        /\\(?:mu|nu|alpha|beta|gamma|delta|Delta|epsilon|varepsilon|zeta|eta|theta|vartheta|Theta|iota|kappa|lambda|Lambda|xi|pi|Pi|rho|sigma|Sigma|tau|phi|varphi|Phi|chi|psi|Psi|omega|Omega|pm|mp|times|cdot|approx|leq|geq|neq|infty|propto|degree)\b(?:_\{[^}]+\}|_[a-zA-Z0-9]+|\^\{[^}]+\}|\^[a-zA-Z0-9]+)?/g,
+        (match) => `$${match}$`
+      );
     })
     .join('');
 }
@@ -478,6 +549,7 @@ export default function NoicLeaguePage() {
   const [loadingOlympiads, setLoadingOlympiads] = useState(false);
   const [selectedCompetition, setSelectedCompetition] = useState<string | null>(null);
   const [activeOlympiad, setActiveOlympiad] = useState<Olympiad | null>(null);
+  const [selectedQuestionTab, setSelectedQuestionTab] = useState<string>('all');
   const [timeLeftSeconds, setTimeLeftSeconds] = useState(0);
   const [timerRunning, setTimerRunning] = useState(false);
 
@@ -681,6 +753,7 @@ export default function NoicLeaguePage() {
 
   function openProblemFromTagList(prob: Problem) {
     setActiveOlympiad(null);
+    setSelectedQuestionTab('all');
     setTimerRunning(false);
     setSelectedProblem(prob);
     setLastFeedback(null);
@@ -714,9 +787,16 @@ export default function NoicLeaguePage() {
       const res = await fetch(`${API_URL}/olympiads/${oly.id}/problems`);
       if (res.ok) {
         const rawData: Problem[] = await res.json();
-        const data = [...rawData].sort((a, b) => compareProblemCodes(a.irodov_code, b.irodov_code));
+        const data = [...rawData].sort(compareOlympiadProblems);
         setProblems(data);
-        setSelectedProblem(data.length > 0 ? data[0] : null);
+        if (data.length > 0) {
+          const firstMeta = extractOlympiadQuestionMeta(data[0].irodov_code);
+          setSelectedQuestionTab(firstMeta.groupKey);
+          setSelectedProblem(data[0]);
+        } else {
+          setSelectedQuestionTab('all');
+          setSelectedProblem(null);
+        }
       }
     } finally {
       setLoadingData(false);
@@ -725,6 +805,7 @@ export default function NoicLeaguePage() {
 
   function exitOlympiadSimulation(goToTab: 'olympiads' | 'problem' = 'olympiads') {
     setActiveOlympiad(null);
+    setSelectedQuestionTab('all');
     setTimerRunning(false);
     setTimeLeftSeconds(0);
     setLastFeedback(null);
@@ -970,6 +1051,47 @@ export default function NoicLeaguePage() {
     if (!activeOlympiad) return 0;
     return problems.filter((p) => solvedProblemIds.has(p.id)).length;
   }, [activeOlympiad, problems, solvedProblemIds]);
+
+  const olympiadQuestionGroups = useMemo(() => {
+    if (!activeOlympiad) return [];
+    const map = new Map<
+      string,
+      { key: string; label: string; rank: number; num: number; items: Problem[] }
+    >();
+
+    for (const prob of problems) {
+      const meta = extractOlympiadQuestionMeta(prob.irodov_code);
+      const existing = map.get(meta.groupKey);
+      if (existing) {
+        existing.items.push(prob);
+      } else {
+        map.set(meta.groupKey, {
+          key: meta.groupKey,
+          label: meta.groupLabel,
+          rank: meta.groupRank,
+          num: meta.groupNum,
+          items: [prob],
+        });
+      }
+    }
+
+    return Array.from(map.values()).sort((a, b) =>
+      a.rank !== b.rank ? a.rank - b.rank : a.num - b.num
+    );
+  }, [activeOlympiad, problems]);
+
+  const displayedProblems = useMemo(() => {
+    if (!activeOlympiad || selectedQuestionTab === 'all') return problems;
+    const found = olympiadQuestionGroups.find((g) => g.key === selectedQuestionTab);
+    return found ? found.items : problems;
+  }, [activeOlympiad, selectedQuestionTab, olympiadQuestionGroups, problems]);
+
+  const activeQuestionGroupLabel = useMemo(() => {
+    if (!activeOlympiad) return null;
+    if (selectedQuestionTab === 'all') return activeOlympiad.title;
+    const found = olympiadQuestionGroups.find((g) => g.key === selectedQuestionTab);
+    return found ? `${activeOlympiad.competition} ${activeOlympiad.year} — ${found.label}` : activeOlympiad.title;
+  }, [activeOlympiad, selectedQuestionTab, olympiadQuestionGroups]);
 
   const filteredOlympiads = useMemo(() => {
     if (!selectedCompetition) return [];
@@ -1863,6 +1985,60 @@ export default function NoicLeaguePage() {
               </div>
             )}
 
+            {activeOlympiad && olympiadQuestionGroups.length > 0 && (
+              <div className="flex flex-wrap items-center gap-2 bg-[#111827] border border-slate-800 rounded-xl p-2.5">
+                {olympiadQuestionGroups.map((group) => {
+                  const solvedInGroup = group.items.filter((p) => solvedProblemIds.has(p.id)).length;
+                  const allDone = solvedInGroup === group.items.length && group.items.length > 0;
+                  const isActive = selectedQuestionTab === group.key;
+
+                  return (
+                    <button
+                      key={group.key}
+                      type="button"
+                      onClick={() => {
+                        setSelectedQuestionTab(group.key);
+                        setActiveTab('problem');
+                        setLastFeedback(null);
+                        setAnswerInput('');
+                        if (group.items.length > 0) {
+                          setSelectedProblem(group.items[0]);
+                        }
+                      }}
+                      className={`px-3.5 py-2 rounded-lg text-xs font-semibold transition flex items-center gap-2 border ${
+                        isActive
+                          ? 'bg-amber-500/20 text-amber-200 border-amber-500/40'
+                          : 'bg-[#0b0f19] text-slate-300 border-slate-800 hover:border-slate-600 hover:text-white'
+                      }`}
+                    >
+                      <span>{group.label}</span>
+                      <span
+                        className={`px-1.5 py-0.5 rounded font-mono text-[10px] ${
+                          allDone
+                            ? 'bg-emerald-500/20 text-emerald-300'
+                            : 'bg-slate-800 text-slate-400'
+                        }`}
+                      >
+                        {solvedInGroup}/{group.items.length}
+                      </span>
+                    </button>
+                  );
+                })}
+
+                <button
+                  type="button"
+                  onClick={() => setSelectedQuestionTab('all')}
+                  className={`ml-auto px-3 py-2 rounded-lg text-xs font-medium transition border ${
+                    selectedQuestionTab === 'all'
+                      ? 'bg-slate-700 text-white border-slate-600'
+                      : 'bg-[#0b0f19] text-slate-400 border-slate-800 hover:text-white'
+                  }`}
+                >
+                  Todas ({problems.length})
+                </button>
+              </div>
+            )}
+
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
               <div className="lg:col-span-8 space-y-6">
                 {loadingData ? (
@@ -2218,10 +2394,10 @@ export default function NoicLeaguePage() {
                     </div>
                   )}
 
-                  <div className="px-4 py-3 border-b border-slate-800 flex items-center justify-between">
-                    <span className="text-sm font-bold text-white flex items-center gap-2">
+                  <div className="px-4 py-3 border-b border-slate-800 flex items-center justify-between gap-2">
+                    <span className="text-sm font-bold text-white flex items-center gap-2 truncate">
                       <BarChart3
-                        className={`w-4 h-4 ${
+                        className={`w-4 h-4 shrink-0 ${
                           activeOlympiad
                             ? 'text-amber-400'
                             : selectedSource === 'noic'
@@ -2229,12 +2405,16 @@ export default function NoicLeaguePage() {
                             : 'text-indigo-400'
                         }`}
                       />
-                      {activeOlympiad ? activeOlympiad.title : `Acervo ${selectedSource === 'noic' ? 'NOIC' : 'Irodov'}`}
+                      <span className="truncate">
+                        {activeOlympiad
+                          ? activeQuestionGroupLabel || activeOlympiad.title
+                          : `Acervo ${selectedSource === 'noic' ? 'NOIC' : 'Irodov'}`}
+                      </span>
                     </span>
-                    <span className="text-xs text-slate-400">{problems.length} itens</span>
+                    <span className="text-xs text-slate-400 shrink-0">{displayedProblems.length} itens</span>
                   </div>
                   <div className="divide-y divide-slate-800/70 max-h-80 overflow-y-auto">
-                    {problems.map((prob) => {
+                    {displayedProblems.map((prob) => {
                       const isSelected = selectedProblem?.id === prob.id;
                       const isSolved = solvedProblemIds.has(prob.id);
                       return (
