@@ -1172,3 +1172,228 @@ export default function SolutionWhiteboard({
                   },
                 }}
                 onChange={handleBoardChange}
+                UIOptions={{
+                  canvasActions: {
+                    loadScene: false,
+                    saveToActiveFile: false,
+                    toggleTheme: true,
+                    export: { saveFileToDisk: true },
+                  },
+                }}
+              />
+            </div>
+
+            {/* Caixa de seleção ao segurar o botão lateral da caneta */}
+            {sideDragBox && (
+              <div
+                className="pointer-events-none absolute z-30 border-2 border-cyan-400 bg-cyan-400/15 rounded-sm"
+                style={{
+                  left: sideDragBox.left,
+                  top: sideDragBox.top,
+                  width: sideDragBox.width,
+                  height: sideDragBox.height,
+                }}
+              />
+            )}
+
+            {/* Feedback discreto de forma reconhecida / troca de ferramenta */}
+            {toastMsg && (
+              <div className="pointer-events-none absolute top-3 left-1/2 -translate-x-1/2 z-30 px-3 py-1 rounded-full bg-slate-900/90 border border-slate-700 text-[11px] font-medium text-slate-200 shadow-lg backdrop-blur">
+                {toastMsg}
+              </div>
+            )}
+
+            {/* Dock flutuante estilo Microsoft Whiteboard */}
+            {minimalUi && (
+              <div
+                data-wb-dock="true"
+                className="absolute bottom-3 left-1/2 -translate-x-1/2 z-20 max-w-[96%] overflow-x-auto bg-[#0f172a]/92 backdrop-blur-md border border-slate-700/80 rounded-2xl px-2.5 py-1.5 shadow-2xl shadow-black/50 flex items-center gap-1.5"
+              >
+                <button
+                  type="button"
+                  onClick={() => selectTool('selection', false)}
+                  className={`p-2 rounded-xl transition ${
+                    activeTool === 'selection'
+                      ? 'bg-indigo-600 text-white shadow'
+                      : 'text-slate-300 hover:bg-slate-800 hover:text-white'
+                  }`}
+                  title="Selecionar (V ou botão lateral da caneta)"
+                >
+                  <MousePointer2 className="w-4 h-4" />
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => selectPen(penColor, strokeWidth)}
+                  className={`p-2 rounded-xl transition ${
+                    activeTool === 'freedraw' && !isHighlighter
+                      ? 'bg-indigo-600 text-white shadow'
+                      : 'text-slate-300 hover:bg-slate-800 hover:text-white'
+                  }`}
+                  title="Caneta (P)"
+                >
+                  <PenTool className="w-4 h-4" />
+                </button>
+
+                <button
+                  type="button"
+                  onClick={selectHighlighter}
+                  className={`p-2 rounded-xl transition ${
+                    activeTool === 'freedraw' && isHighlighter
+                      ? 'bg-amber-500/25 text-amber-300 ring-1 ring-amber-400/50'
+                      : 'text-slate-300 hover:bg-slate-800 hover:text-white'
+                  }`}
+                  title="Marca-texto"
+                >
+                  <Highlighter className="w-4 h-4" />
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => selectTool('eraser', true)}
+                  className={`p-2 rounded-xl transition ${
+                    activeTool === 'eraser'
+                      ? 'bg-rose-600 text-white shadow'
+                      : 'text-slate-300 hover:bg-slate-800 hover:text-white'
+                  }`}
+                  title="Borracha (E)"
+                >
+                  <Eraser className="w-4 h-4" />
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => selectTool('arrow', false)}
+                  className={`p-2 rounded-xl transition ${
+                    activeTool === 'arrow'
+                      ? 'bg-indigo-600 text-white shadow'
+                      : 'text-slate-300 hover:bg-slate-800 hover:text-white'
+                  }`}
+                  title="Seta / Vetor (A)"
+                >
+                  <ArrowUpRight className="w-4 h-4" />
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => selectTool('text', false)}
+                  className={`p-2 rounded-xl transition ${
+                    activeTool === 'text'
+                      ? 'bg-indigo-600 text-white shadow'
+                      : 'text-slate-300 hover:bg-slate-800 hover:text-white'
+                  }`}
+                  title="Texto (T)"
+                >
+                  <Type className="w-4 h-4" />
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => selectTool('hand', false)}
+                  className={`p-2 rounded-xl transition ${
+                    activeTool === 'hand'
+                      ? 'bg-indigo-600 text-white shadow'
+                      : 'text-slate-300 hover:bg-slate-800 hover:text-white'
+                  }`}
+                  title="Mover lousa (H ou Espaço)"
+                >
+                  <Hand className="w-4 h-4" />
+                </button>
+
+                <div className="w-px h-6 bg-slate-700/80 mx-0.5 shrink-0" />
+
+                {/* Cores rápidas */}
+                <div className="flex items-center gap-1 px-0.5">
+                  {PEN_COLORS.map((c) => {
+                    const selected = !isHighlighter && penColor === c.hex && activeTool === 'freedraw';
+                    return (
+                      <button
+                        key={c.hex}
+                        type="button"
+                        onClick={() => selectPen(c.hex, strokeWidth)}
+                        title={c.label}
+                        className={`w-5 h-5 rounded-full transition-transform ${
+                          selected
+                            ? 'scale-115 ring-2 ring-white ring-offset-2 ring-offset-[#0f172a]'
+                            : 'hover:scale-110 opacity-85 hover:opacity-100'
+                        }`}
+                        style={{ backgroundColor: c.hex }}
+                      />
+                    );
+                  })}
+                </div>
+
+                <div className="w-px h-6 bg-slate-700/80 mx-0.5 shrink-0" />
+
+                {/* Espessuras */}
+                <div className="flex items-center gap-0.5">
+                  {STROKE_WIDTHS.map((sw) => (
+                    <button
+                      key={sw.value}
+                      type="button"
+                      onClick={() => selectPen(penColor, sw.value)}
+                      title={`Traço ${sw.label}`}
+                      className={`w-7 h-7 rounded-lg flex items-center justify-center transition ${
+                        !isHighlighter && strokeWidth === sw.value
+                          ? 'bg-slate-700 text-white'
+                          : 'text-slate-400 hover:bg-slate-800 hover:text-white'
+                      }`}
+                    >
+                      <span
+                        className="rounded-full bg-current block"
+                        style={{
+                          width: sw.value === 1 ? 4 : sw.value === 2 ? 7 : 10,
+                          height: sw.value === 1 ? 4 : sw.value === 2 ? 7 : 10,
+                        }}
+                      />
+                    </button>
+                  ))}
+                </div>
+
+                <div className="w-px h-6 bg-slate-700/80 mx-0.5 shrink-0" />
+
+                <button
+                  type="button"
+                  onClick={toggleGrid}
+                  className={`p-2 rounded-xl transition ${
+                    showGrid
+                      ? 'bg-slate-800 text-indigo-300'
+                      : 'text-slate-400 hover:bg-slate-800 hover:text-white'
+                  }`}
+                  title={showGrid ? 'Ocultar grade' : 'Mostrar grade'}
+                >
+                  <LayoutGrid className="w-4 h-4" />
+                </button>
+              </div>
+            )}
+          </>
+        ) : (
+          <div className="w-full h-full grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-slate-800 overflow-hidden">
+            <div className="flex flex-col h-full p-4">
+              <div className="text-[11px] font-mono uppercase text-slate-400 mb-2">
+                Anotações em Markdown / LaTeX
+              </div>
+              <textarea
+                value={notesValue}
+                onChange={(e) => {
+                  setNotesValue(e.target.value);
+                  notesRef.current = e.target.value;
+                  scheduleAutoSave();
+                }}
+                placeholder="Anote sua dedução, equações-chave (ex: $$F = m\ddot{x}$$) ou pontos de revisão..."
+                className="flex-1 w-full resize-none rounded-lg bg-[#111827] border border-slate-800 p-3 text-sm font-mono text-slate-100 focus:border-indigo-500 focus:outline-none"
+              />
+            </div>
+
+            <div className="flex flex-col h-full p-4 overflow-y-auto bg-[#0f1629]/40">
+              <div className="text-[11px] font-mono uppercase text-indigo-400 mb-2">
+                Preview Renderizado (KaTeX)
+              </div>
+              <NotesMathPreview content={notesValue} />
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
