@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 'use client';
 
 import React, { useState, useEffect, useMemo } from 'react';
@@ -33,11 +34,12 @@ import {
   Trash2,
 } from 'lucide-react';
 import noicLogo from './noic.png';
+import ResizableSplitWorkspace from './components/ResizableSplitWorkspace';
 
 const SolutionWhiteboard = dynamic(() => import('./components/SolutionWhiteboard'), {
   ssr: false,
   loading: () => (
-    <div className="bg-[#111827] border border-slate-800 rounded-xl h-[78vh] min-h-[580px] flex items-center justify-center text-sm text-slate-400">
+    <div className="bg-[#111827] border border-slate-800 rounded-xl h-full min-h-[580px] flex items-center justify-center text-sm text-slate-400">
       Inicializando mesa digital (Excalidraw)...
     </div>
   ),
@@ -1342,23 +1344,361 @@ export default function NoicLeaguePage() {
 
   const isWideWorkspace =
     (activeTab === 'problem' && Boolean(activeOlympiad) && olympiadBoardOpen) ||
-    (activeTab === 'problem' && !activeOlympiad && problemBoardOpen) ||
+    ((activeTab === 'problem' || activeTab === 'editorial') && !activeOlympiad && problemBoardOpen && Boolean(selectedProblem)) ||
     (activeTab === 'drive' && Boolean(activeScratchpad));
+
+  // Conteúdo reutilizado no Modo Problemas (tanto no layout padrão quanto no Split-Screen arrastável)
+  const problemMainPane = loadingData ? (
+    <div className="bg-[#111827] border border-slate-800 rounded-xl p-12 text-center text-slate-400">
+      Conectando à API e carregando acervo {sourceLabel}...
+    </div>
+  ) : !selectedProblem ? (
+    <div className="bg-[#111827] border border-slate-800 rounded-xl p-12 text-center text-slate-400">
+      {selectedSource === 'noic' ? (
+        <>
+          Nenhuma questão encontrada no acervo <strong className="text-indigo-400">NOIC</strong>. Rode o script{' '}
+          <code className="text-indigo-400">seed_noic.py</code> para popular este banco.
+        </>
+      ) : (
+        <>
+          Nenhuma questão encontrada. Execute o arquivo <code className="text-indigo-400">database/schema_neon.sql</code> no SQL Editor do Neon.
+        </>
+      )}
+    </div>
+  ) : activeTab === 'editorial' ? (
+    <div className="bg-[#111827] border border-slate-800 rounded-xl p-6 space-y-4">
+      <div className="flex items-center justify-between border-b border-slate-800 pb-4">
+        <div>
+          <span className="text-xs font-mono text-indigo-400">Editorial Oficial ({sourceLabel})</span>
+          <h2 className="text-xl font-bold text-white">
+            {selectedProblem.irodov_code} — {selectedProblem.title}
+          </h2>
+        </div>
+        <button
+          onClick={() => setActiveTab('problem')}
+          className="text-sm text-indigo-400 hover:underline"
+        >
+          Voltar ao problema
+        </button>
+      </div>
+
+      {editorialContent ? (
+        <div className="prose prose-invert max-w-none">
+          <MathText content={editorialContent} />
+        </div>
+      ) : (
+        <div className="p-6 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-200 text-sm flex items-start gap-3">
+          <AlertCircle className="w-5 h-5 shrink-0 mt-0.5 text-amber-400" />
+          <div>
+            <p className="font-semibold">Editorial bloqueado</p>
+            <p className="text-amber-200/80 mt-1">
+              {editorialError || 'Resolva o problema primeiro para desbloquear a solução comentada.'}
+            </p>
+          </div>
+        </div>
+      )}
+    </div>
+  ) : (
+    <div className="space-y-4">
+      <div className="bg-[#111827] border border-slate-800 rounded-xl p-5 space-y-4">
+        <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-800 pb-3.5">
+          <div>
+            <div className="flex items-center gap-2 text-xs font-mono text-slate-400 mb-1">
+              <span
+                className={`px-2 py-0.5 rounded ${
+                  currentProblemIsUnrated
+                    ? 'bg-amber-500/15 text-amber-300 border border-amber-500/30'
+                    : selectedProblem.source === 'noic'
+                    ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30'
+                    : 'bg-slate-800 text-indigo-300'
+                }`}
+              >
+                {currentProblemIsUnrated ? selectedProblem.irodov_code : `${sourceLabel} ${selectedProblem.irodov_code}`}
+              </span>
+              <span>•</span>
+              <button
+                type="button"
+                onClick={() => {
+                  setActiveTag(selectedProblem.category);
+                  setActiveTab('tags');
+                }}
+                className="hover:text-indigo-400 transition"
+                title="Filtrar mais questões desta área"
+              >
+                {selectedProblem.category}
+                {selectedProblem.raw_category &&
+                  selectedProblem.raw_category.trim().toLowerCase() !==
+                    selectedProblem.category.trim().toLowerCase() && (
+                    <span className="text-slate-500"> · {selectedProblem.raw_category}</span>
+                  )}
+              </button>
+            </div>
+            <h1 className={problemBoardOpen ? 'text-lg font-bold text-white' : 'text-2xl font-bold text-white'}>
+              {selectedProblem.title}
+            </h1>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setProblemBoardOpen((prev) => !prev)}
+              className={`px-3 py-1.5 rounded-md text-xs font-semibold transition flex items-center gap-1.5 border ${
+                problemBoardOpen
+                  ? 'bg-indigo-600 text-white border-indigo-500'
+                  : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border-slate-700'
+              }`}
+            >
+              <PenTool className="w-3.5 h-3.5" />
+              {problemBoardOpen ? 'Fechar Lousa' : 'Abrir Lousa'}
+            </button>
+
+            {solvedProblemIds.has(selectedProblem.id) && (
+              <span className="flex items-center gap-1 px-2.5 py-1 rounded-md bg-emerald-500/15 text-emerald-400 text-xs font-semibold border border-emerald-500/30">
+                <CheckCircle2 className="w-3.5 h-3.5" /> Resolvido
+              </span>
+            )}
+            <span className="px-3 py-1 rounded-md bg-slate-800 text-xs font-mono text-slate-300 border border-slate-700">
+              {currentProblemIsUnrated ? (
+                <>
+                  <strong className="text-amber-400">*{selectedProblem.difficulty_rating}</strong>{' '}
+                  <span className="text-slate-400">(Unrated)</span>
+                </>
+              ) : (
+                <>
+                  Rating: <strong className="text-amber-400">*{selectedProblem.difficulty_rating}</strong>
+                </>
+              )}
+            </span>
+          </div>
+        </div>
+
+        <div className={problemBoardOpen ? 'text-sm' : 'text-base'}>
+          <MathText content={selectedProblem.statement_latex} />
+        </div>
+
+        {selectedProblem.figure_url && (
+          <div className="my-3 flex justify-center rounded-xl border border-slate-800/80 bg-[#0b0f19] p-3">
+            <img
+              src={selectedProblem.figure_url}
+              alt={`Figura da questão ${selectedProblem.irodov_code}`}
+              className="max-h-72 w-auto object-contain invert mix-blend-screen contrast-125"
+            />
+          </div>
+        )}
+
+        {selectedProblem.svg_diagram && (
+          <div
+            className="p-4 rounded-lg bg-[#0b0f19] border border-slate-800 flex justify-center"
+            dangerouslySetInnerHTML={{ __html: selectedProblem.svg_diagram }}
+          />
+        )}
+
+        <div className="p-3 rounded-lg bg-slate-900/90 border border-slate-800 text-xs text-slate-300 flex items-center justify-between gap-4">
+          <div>
+            <span className="font-semibold text-indigo-400">Formato esperado: </span>
+            {selectedProblem.answer_type === 'self_graded'
+              ? 'Demonstração / Gráfico / Discursiva (Autoavaliação — Unrated)'
+              : selectedProblem.answer_type === 'algebraic'
+              ? `Expressão simbólica (${selectedProblem.variables_hint || 'use g, m, R, v_0, alpha...'})`
+              : `Valor numérico ${selectedProblem.unit ? `em [${selectedProblem.unit}]` : ''}`}
+          </div>
+          <span className="font-mono text-slate-500 shrink-0">
+            Motor: {selectedProblem.answer_type === 'self_graded' ? 'Autoavaliação' : 'SymPy'}
+          </span>
+        </div>
+      </div>
+
+      {selectedProblem.answer_type === 'self_graded' ? (
+        <div className="bg-[#111827] border border-slate-800 rounded-xl p-5 space-y-4">
+          <div className="flex items-center justify-between">
+            <div className="text-sm font-semibold text-slate-200 flex items-center gap-2">
+              <BookOpen className="w-4 h-4 text-amber-400" />
+              Autoavaliação (Discursiva / Demonstração)
+            </div>
+            <span className="px-2 py-0.5 rounded text-[11px] font-mono bg-amber-500/15 text-amber-300 border border-amber-500/30">
+              UNRATED
+            </span>
+          </div>
+
+          {selfGradeEditorial === null ? (
+            <div className="space-y-3">
+              <p className="text-xs text-slate-400">
+                Resolva este item no papel ou na Lousa ao lado. Quando terminar, revele a solução oficial para se autoavaliar.
+              </p>
+              {selfGradeError && (
+                <div className="p-3 rounded-lg bg-rose-500/10 border border-rose-500/30 text-xs text-rose-300">
+                  {selfGradeError}
+                </div>
+              )}
+              <button
+                type="button"
+                onClick={handleRevealSelfGradeSolution}
+                disabled={selfGradeLoading}
+                className="w-full py-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-sm font-semibold text-white transition flex items-center justify-center gap-2"
+              >
+                <BookOpen className="w-4 h-4" />
+                {selfGradeLoading ? 'Carregando solução...' : 'Revelar Solução Oficial e Autoavaliar'}
+              </button>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <div className="p-4 rounded-lg bg-[#0b0f19] border border-slate-800 space-y-2">
+                <div className="text-xs font-mono uppercase text-indigo-400">Solução Oficial</div>
+                <div className="prose prose-invert max-w-none text-sm">
+                  <MathText content={selfGradeEditorial} />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <button
+                  type="button"
+                  disabled={submitting}
+                  onClick={() => handleSelfGradeSubmit('AC')}
+                  className="py-2.5 px-4 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-sm font-semibold text-white transition flex items-center justify-center gap-2"
+                >
+                  <CheckCircle2 className="w-4 h-4" />
+                  Acertei (Marcar AC)
+                </button>
+                <button
+                  type="button"
+                  disabled={submitting}
+                  onClick={() => handleSelfGradeSubmit('WA')}
+                  className="py-2.5 px-4 rounded-lg bg-rose-600/80 hover:bg-rose-600 disabled:opacity-50 text-sm font-semibold text-white transition flex items-center justify-center gap-2"
+                >
+                  <XCircle className="w-4 h-4" />
+                  Errei / Revisar (Marcar WA)
+                </button>
+              </div>
+            </div>
+          )}
+
+          {lastFeedback && (
+            <div
+              className={`p-4 rounded-lg border flex items-center justify-between text-sm ${
+                lastFeedback.verdict === 'AC'
+                  ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
+                  : 'bg-rose-500/10 border-rose-500/30 text-rose-300'
+              }`}
+            >
+              <div className="flex items-center gap-2.5">
+                {lastFeedback.verdict === 'AC' ? (
+                  <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0" />
+                ) : (
+                  <XCircle className="w-5 h-5 text-rose-400 shrink-0" />
+                )}
+                <span>{lastFeedback.message}</span>
+              </div>
+              <span className="font-mono text-xs text-slate-400">Unrated</span>
+            </div>
+          )}
+        </div>
+      ) : (
+        <form
+          onSubmit={handleSubmitSolution}
+          className="bg-[#111827] border border-slate-800 rounded-xl p-5 space-y-4"
+        >
+          <div className="flex items-center justify-between">
+            <label className="text-sm font-semibold text-slate-200 flex items-center gap-2">
+              <Code2 className="w-4 h-4 text-indigo-400" />
+              Sua Resposta ({selectedProblem.answer_type === 'algebraic' ? 'Algébrica' : 'Numérica'})
+            </label>
+            <span className="text-xs text-slate-500">
+              {selectedProblem.answer_type === 'algebraic'
+                ? 'Ex: sqrt(2*g*h) ou 2*R/3'
+                : 'Ex: 0.1, 10 cm/s ou 0.36 km/h'}
+            </span>
+          </div>
+
+          <input
+            type="text"
+            value={answerInput}
+            onChange={(e) => setAnswerInput(e.target.value)}
+            placeholder={
+              selectedProblem.answer_type === 'algebraic'
+                ? 'Digite a expressão em sintaxe Python/SymPy...'
+                : 'Digite o valor com ou sem unidade (ex: 0.1, 10 cm/s ou 0.36 km/h)...'
+            }
+            className="w-full px-4 py-3 rounded-lg bg-[#0b0f19] border border-slate-700 focus:border-indigo-500 focus:outline-none font-mono text-sm text-white"
+          />
+
+          {answerInput.trim() && (
+            <div className="p-3 rounded-lg bg-[#0b0f19]/80 border border-slate-800 flex items-center justify-between">
+              <span className="text-xs text-slate-500">Preview matemático:</span>
+              <div className="text-indigo-300">
+                <InlineMath math={toPreviewLatex(answerInput)} />
+              </div>
+            </div>
+          )}
+
+          {lastFeedback && (
+            <div
+              className={`p-4 rounded-lg border flex items-center justify-between text-sm ${
+                lastFeedback.verdict === 'AC'
+                  ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
+                  : 'bg-rose-500/10 border-rose-500/30 text-rose-300'
+              }`}
+            >
+              <div className="flex items-center gap-2.5">
+                {lastFeedback.verdict === 'AC' ? (
+                  <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0" />
+                ) : (
+                  <XCircle className="w-5 h-5 text-rose-400 shrink-0" />
+                )}
+                <span>{lastFeedback.message}</span>
+              </div>
+              {lastFeedback.unrated ? (
+                <span className="font-mono text-xs text-slate-400">Unrated</span>
+              ) : (
+                typeof lastFeedback.ratingDelta === 'number' &&
+                lastFeedback.ratingDelta !== 0 && (
+                  <span className="font-mono font-bold">
+                    {lastFeedback.ratingDelta > 0
+                      ? `+${lastFeedback.ratingDelta}`
+                      : lastFeedback.ratingDelta}{' '}
+                    Elo
+                  </span>
+                )
+              )}
+            </div>
+          )}
+
+          <div className="flex items-center justify-between pt-2">
+            <button
+              type="button"
+              onClick={openEditorialTab}
+              className="text-xs text-slate-400 hover:text-indigo-400 flex items-center gap-1.5 transition"
+            >
+              <BookOpen className="w-4 h-4" /> Ver Editorial
+            </button>
+
+            <button
+              type="submit"
+              disabled={submitting || !answerInput.trim()}
+              className="flex items-center gap-2 px-5 py-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-sm font-semibold text-white transition"
+            >
+              <Send className="w-4 h-4" />
+              {submitting ? 'Julgando...' : 'Submeter Solução'}
+            </button>
+          </div>
+        </form>
+      )}
+    </div>
+  );
 
   return (
     <div className="min-h-screen bg-[#0b0f19] text-slate-100 font-sans">
       <header className="border-b border-slate-800 bg-[#0f1629]/90 backdrop-blur sticky top-0 z-30">
-        <div className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between gap-4">
+        <div className={`${isWideWorkspace ? 'max-w-full px-3' : 'max-w-7xl mx-auto px-4'} h-14 flex items-center justify-between gap-4`}>
           <div className="flex items-center gap-6 min-w-0">
             <div className="flex items-center gap-2.5 shrink-0">
               <img
                 src={noicLogo.src}
                 alt="Logo NOIC"
-                className="w-9 h-9 rounded-lg object-contain bg-white/95 p-1 shadow-lg shadow-indigo-600/20"
+                className="w-8 h-8 rounded-lg object-contain bg-white/95 p-1 shadow-lg shadow-indigo-600/20"
               />
               <div>
-                <span className="font-bold text-lg tracking-tight text-white">NOIC</span>{' '}
-                <span className="font-bold text-lg tracking-tight text-indigo-400">League</span>
+                <span className="font-bold text-base tracking-tight text-white">NOIC</span>{' '}
+                <span className="font-bold text-base tracking-tight text-indigo-400">League</span>
               </div>
             </div>
 
@@ -1443,8 +1783,8 @@ export default function NoicLeaguePage() {
                   className="text-right hidden sm:block hover:opacity-85 transition"
                   title="Ver meu perfil e gráfico de rating"
                 >
-                  <div className={`text-sm font-bold ${rank.color}`}>{user.username}</div>
-                  <div className="text-xs text-slate-400">
+                  <div className={`text-sm font-bold leading-tight ${rank.color}`}>{user.username}</div>
+                  <div className="text-[11px] text-slate-400">
                     Rating: <span className={`font-mono font-semibold ${rank.color}`}>{user.rating}</span> ({rank.title})
                   </div>
                 </button>
@@ -1470,7 +1810,7 @@ export default function NoicLeaguePage() {
                   setAuthMode('login');
                   setAuthModalOpen(true);
                 }}
-                className="flex items-center gap-2 px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-sm font-semibold text-white transition"
+                className="flex items-center gap-2 px-4 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-sm font-semibold text-white transition"
               >
                 <LogIn className="w-4 h-4" />
                 Entrar
@@ -1480,10 +1820,10 @@ export default function NoicLeaguePage() {
         </div>
       </header>
 
-      <main className={`${isWideWorkspace ? 'max-w-[1640px]' : 'max-w-7xl'} mx-auto px-4 py-6 transition-all`}>
+      <main className={`${isWideWorkspace ? 'max-w-full px-2 py-2' : 'max-w-7xl mx-auto px-4 py-6'} transition-all`}>
         {activeTab === 'drive' ? (
           /* ================= ABA MEU DRIVE (CADERNO & LOUSAS SALVAS) ================= */
-          <div className="space-y-6">
+          <div className={activeScratchpad ? 'space-y-2' : 'space-y-6'}>
             {!user || !token ? (
               <div className="bg-[#111827] border border-slate-800 rounded-xl p-12 text-center space-y-4">
                 <FolderOpen className="w-10 h-10 text-indigo-400 mx-auto" />
@@ -1503,15 +1843,15 @@ export default function NoicLeaguePage() {
                 </button>
               </div>
             ) : activeScratchpad ? (
-              <div className="space-y-4">
-                <div className="bg-[#111827] border border-slate-800 rounded-xl px-5 py-3.5 flex flex-wrap items-center justify-between gap-3">
+              <div className="flex flex-col gap-2 h-[calc(100vh-4.75rem)] min-h-[600px]">
+                <div className="bg-[#111827] border border-slate-800 rounded-xl px-4 py-2 flex flex-wrap items-center justify-between gap-3 shrink-0">
                   <button
                     type="button"
                     onClick={() => {
                       setActiveScratchpad(null);
                       fetchDriveItems(token);
                     }}
-                    className="flex items-center gap-2 text-sm text-indigo-400 hover:text-indigo-300 font-medium"
+                    className="flex items-center gap-2 text-xs text-indigo-400 hover:text-indigo-300 font-medium"
                   >
                     <ArrowLeft className="w-4 h-4" /> Voltar para Meu Drive
                   </button>
@@ -1520,22 +1860,25 @@ export default function NoicLeaguePage() {
                   </span>
                 </div>
 
-                <SolutionWhiteboard
-                  apiUrl={API_URL}
-                  token={token}
-                  targetType="scratchpad"
-                  targetId={activeScratchpad.id}
-                  defaultTitle={activeScratchpad.title}
-                  editableTitle
-                  onRequireAuth={() => setAuthModalOpen(true)}
-                  onSaved={(meta) => {
-                    if (meta.titleOverride) {
-                      setActiveScratchpad((prev) =>
-                        prev ? { ...prev, title: meta.titleOverride } : prev
-                      );
-                    }
-                  }}
-                />
+                <div className="flex-1 min-h-0">
+                  <SolutionWhiteboard
+                    apiUrl={API_URL}
+                    token={token}
+                    targetType="scratchpad"
+                    targetId={activeScratchpad.id}
+                    defaultTitle={activeScratchpad.title}
+                    editableTitle
+                    fillHeight
+                    onRequireAuth={() => setAuthModalOpen(true)}
+                    onSaved={(meta) => {
+                      if (meta.titleOverride) {
+                        setActiveScratchpad((prev) =>
+                          prev ? { ...prev, title: meta.titleOverride } : prev
+                        );
+                      }
+                    }}
+                  />
+                </div>
               </div>
             ) : (
               <>
@@ -2386,47 +2729,79 @@ export default function NoicLeaguePage() {
           </div>
         ) : activeOlympiad ? (
           /* ================= MODO SIMULADOR DE OLIMPÍADA EM PDF + LOUSA ================= */
-          <div className="space-y-5">
-            <div className="bg-[#111827] border border-amber-500/30 rounded-xl px-5 py-4 flex flex-wrap items-center justify-between gap-4">
-              <div className="flex items-center gap-3">
+          <div className={olympiadBoardOpen ? 'space-y-2' : 'space-y-4'}>
+            {/* Barra unificada (mais compacta quando a lousa está aberta) */}
+            <div
+              className={`bg-[#111827] border border-amber-500/30 rounded-xl flex flex-wrap items-center justify-between gap-3 ${
+                olympiadBoardOpen ? 'px-3 py-2' : 'px-5 py-3.5'
+              }`}
+            >
+              <div className="flex items-center gap-2.5 min-w-0 flex-wrap">
                 <button
                   type="button"
                   onClick={() => exitOlympiadSimulation('olympiads')}
-                  className="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition"
+                  className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition shrink-0"
                   title="Sair do simulado"
                 >
                   <ArrowLeft className="w-4 h-4" />
                 </button>
-                <div>
+                <div className="min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
-                    <span className="font-bold text-white text-base">{activeOlympiad.title}</span>
-                    <span className="px-2 py-0.5 rounded text-[11px] font-mono font-semibold bg-amber-500/15 text-amber-300 border border-amber-500/30">
+                    <span className="font-bold text-white text-sm sm:text-base">{activeOlympiad.title}</span>
+                    <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-semibold bg-amber-500/15 text-amber-300 border border-amber-500/30">
                       UNRATED
                     </span>
-                  </div>
-                  <p className="text-xs text-slate-400 mt-0.5">
-                    {olympiadPapers.length} caderno(s) em PDF
                     {maxOlympiadScore > 0 && (
-                      <>
-                        {' '}
-                        • Auto-pontuação:{' '}
+                      <span className="text-xs text-slate-400">
+                        •{' '}
                         <strong className="text-emerald-400 font-mono">
                           {Number.isInteger(totalOlympiadScore)
                             ? totalOlympiadScore
-                            : totalOlympiadScore.toFixed(1)}{' '}
-                          / {maxOlympiadScore} pts
+                            : totalOlympiadScore.toFixed(1)}
+                          /{maxOlympiadScore} pts
                         </strong>
-                      </>
+                      </span>
                     )}
-                  </p>
+                  </div>
                 </div>
+
+                {/* Abas integradas direto na barra quando em modo dividido */}
+                {olympiadBoardOpen && olympiadPapers.length > 0 && (
+                  <div className="flex items-center gap-1 overflow-x-auto pl-2 border-l border-slate-800">
+                    {olympiadPapers.map((paper) => {
+                      const isActive = activePaper?.id === paper.id;
+                      const savedScore = paperScores[paper.id];
+                      const hasScore = savedScore !== undefined && savedScore !== '';
+                      return (
+                        <button
+                          key={paper.id}
+                          type="button"
+                          onClick={() => {
+                            setActivePaperId(paper.id);
+                            setPaperViewMode('exam');
+                          }}
+                          className={`px-2.5 py-1 rounded-md text-xs font-semibold transition flex items-center gap-1.5 border whitespace-nowrap ${
+                            isActive
+                              ? 'bg-amber-500/20 text-amber-200 border-amber-500/40'
+                              : 'bg-[#0b0f19] text-slate-300 border-slate-800 hover:border-slate-600 hover:text-white'
+                          }`}
+                        >
+                          <span>{paper.tab_label}</span>
+                          {hasScore && (
+                            <span className="font-mono text-[10px] text-emerald-300">{savedScore}</span>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
 
-              <div className="flex items-center gap-2.5">
+              <div className="flex items-center gap-2 shrink-0">
                 <button
                   type="button"
                   onClick={() => setOlympiadBoardOpen((prev) => !prev)}
-                  className={`px-3.5 py-2 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 border ${
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 border ${
                     olympiadBoardOpen
                       ? 'bg-indigo-600 text-white border-indigo-500'
                       : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border-slate-700'
@@ -2437,7 +2812,7 @@ export default function NoicLeaguePage() {
                 </button>
 
                 <div
-                  className={`px-3.5 py-1.5 rounded-lg font-mono text-base font-bold border ${
+                  className={`px-2.5 py-1 rounded-lg font-mono text-sm font-bold border ${
                     timeLeftSeconds < 600
                       ? 'bg-rose-500/15 text-rose-400 border-rose-500/30'
                       : 'bg-[#0b0f19] text-amber-300 border-slate-700'
@@ -2448,10 +2823,10 @@ export default function NoicLeaguePage() {
                 <button
                   type="button"
                   onClick={() => setTimerRunning((prev) => !prev)}
-                  className="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 transition"
+                  className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 transition"
                   title={timerRunning ? 'Pausar cronômetro' : 'Retomar cronômetro'}
                 >
-                  {timerRunning ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
+                  {timerRunning ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
                 </button>
                 <button
                   type="button"
@@ -2459,15 +2834,16 @@ export default function NoicLeaguePage() {
                     setTimerRunning(false);
                     setTimeLeftSeconds((activeOlympiad.duration_minutes || 300) * 60);
                   }}
-                  className="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 transition"
+                  className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 transition"
                   title="Reiniciar cronômetro"
                 >
-                  <RotateCcw className="w-4 h-4" />
+                  <RotateCcw className="w-3.5 h-3.5" />
                 </button>
               </div>
             </div>
 
-            {olympiadPapers.length > 0 && (
+            {/* Abas separadas quando a lousa está fechada */}
+            {!olympiadBoardOpen && olympiadPapers.length > 0 && (
               <div className="flex flex-wrap items-center gap-2 bg-[#111827] border border-slate-800 rounded-xl p-2.5">
                 {olympiadPapers.map((paper) => {
                   const isActive = activePaper?.id === paper.id;
@@ -2515,29 +2891,23 @@ export default function NoicLeaguePage() {
                 Nenhum PDF cadastrado para <strong className="text-white">{activeOlympiad.title}</strong> na tabela{' '}
                 <code className="text-indigo-400">olympiad_papers</code>.
               </div>
-            ) : (
-              <div className={olympiadBoardOpen ? 'grid grid-cols-1 xl:grid-cols-12 gap-5 items-start' : ''}>
-                <div
-                  className={`${
-                    olympiadBoardOpen ? 'xl:col-span-6' : ''
-                  } bg-[#111827] border border-slate-800 rounded-xl overflow-hidden`}
-                >
-                  <div className="px-4 py-3 border-b border-slate-800 bg-slate-900/60 flex flex-wrap items-center justify-between gap-3">
-                    <div className="flex items-center gap-2 min-w-0">
-                      <span className="px-2 py-0.5 rounded text-xs font-mono font-bold bg-indigo-500/15 text-indigo-300 border border-indigo-500/30 shrink-0">
-                        {activePaper.tab_label}
-                      </span>
-                      {activePaper.title && (
-                        <span className="text-sm font-semibold text-white truncate">{activePaper.title}</span>
-                      )}
-                    </div>
-
-                    <div className="flex flex-wrap items-center gap-2">
-                      <div className="inline-flex rounded-lg bg-[#0b0f19] p-1 border border-slate-800">
+            ) : olympiadBoardOpen ? (
+              <ResizableSplitWorkspace
+                defaultLeftPercent={38}
+                headerSummary={
+                  <span className="text-xs font-mono text-slate-400">
+                    {activeOlympiad.title} • {activePaper.tab_label}
+                    {activePaper.title ? ` — ${activePaper.title}` : ''}
+                  </span>
+                }
+                left={
+                  <div className="bg-[#111827] border border-slate-800 rounded-xl overflow-hidden flex flex-col h-full">
+                    <div className="px-3 py-1.5 border-b border-slate-800 bg-slate-900/60 flex flex-wrap items-center justify-between gap-2 shrink-0">
+                      <div className="inline-flex rounded-lg bg-[#0b0f19] p-0.5 border border-slate-800">
                         <button
                           type="button"
                           onClick={() => setPaperViewMode('exam')}
-                          className={`px-2.5 py-1 rounded-md text-xs font-semibold transition flex items-center gap-1 ${
+                          className={`px-2 py-1 rounded-md text-xs font-semibold transition flex items-center gap-1 ${
                             paperViewMode === 'exam'
                               ? 'bg-indigo-600 text-white'
                               : 'text-slate-400 hover:text-white'
@@ -2549,7 +2919,7 @@ export default function NoicLeaguePage() {
                           type="button"
                           disabled={!activePaper.solution_pdf_url}
                           onClick={() => setPaperViewMode('solution')}
-                          className={`px-2.5 py-1 rounded-md text-xs font-semibold transition flex items-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed ${
+                          className={`px-2 py-1 rounded-md text-xs font-semibold transition flex items-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed ${
                             paperViewMode === 'solution'
                               ? 'bg-emerald-600 text-white'
                               : 'text-slate-400 hover:text-white'
@@ -2559,535 +2929,287 @@ export default function NoicLeaguePage() {
                         </button>
                       </div>
 
-                      <div className="flex items-center gap-1.5 bg-[#0b0f19] border border-slate-800 rounded-lg px-2 py-1">
-                        <label className="text-[11px] text-slate-400 whitespace-nowrap">Nota:</label>
-                        <input
-                          type="number"
-                          min={0}
-                          max={10}
-                          step={0.5}
-                          value={paperScores[activePaper.id] ?? ''}
-                          onChange={(e) => updatePaperScore(activePaper.id, e.target.value)}
-                          placeholder="0–10"
-                          className="w-12 bg-transparent text-xs font-mono text-emerald-300 focus:outline-none text-right"
-                        />
-                        <span className="text-[11px] font-mono text-slate-500">/10</span>
+                      <div className="flex items-center gap-1.5">
+                        <div className="flex items-center gap-1 bg-[#0b0f19] border border-slate-800 rounded-md px-2 py-0.5">
+                          <label className="text-[11px] text-slate-400">Nota:</label>
+                          <input
+                            type="number"
+                            min={0}
+                            max={10}
+                            step={0.5}
+                            value={paperScores[activePaper.id] ?? ''}
+                            onChange={(e) => updatePaperScore(activePaper.id, e.target.value)}
+                            placeholder="0–10"
+                            className="w-11 bg-transparent text-xs font-mono text-emerald-300 focus:outline-none text-right"
+                          />
+                          <span className="text-[10px] font-mono text-slate-500">/10</span>
+                        </div>
+
+                        {activeRawPdfUrl && (
+                          <a
+                            href={activeRawPdfUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="p-1.5 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-200 transition"
+                            title="Abrir PDF em nova aba"
+                          >
+                            <ExternalLink className="w-3.5 h-3.5" />
+                          </a>
+                        )}
                       </div>
-
-                      {activeRawPdfUrl && (
-                        <a
-                          href={activeRawPdfUrl}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-medium text-slate-200 transition flex items-center gap-1"
-                        >
-                          <ExternalLink className="w-3.5 h-3.5" /> Nova aba
-                        </a>
-                      )}
                     </div>
-                  </div>
 
-                  <div className="bg-[#0b0f19] p-2 sm:p-3">
                     <iframe
                       key={`${activePaper.id}-${paperViewMode}`}
                       src={buildPdfViewerUrl(activeRawPdfUrl)}
                       title={`${activeOlympiad.title} — ${activePaper.tab_label} (${
                         paperViewMode === 'solution' ? 'Solução' : 'Enunciado'
                       })`}
-                      className="w-full h-[78vh] min-h-[580px] rounded-lg border border-slate-800 bg-slate-950"
+                      className="w-full flex-1 min-h-[480px] bg-slate-950"
                     />
                   </div>
-                </div>
-
-                {olympiadBoardOpen && (
-                  <div className="xl:col-span-6">
-                    <SolutionWhiteboard
-                      apiUrl={API_URL}
-                      token={token}
-                      targetType="olympiad_paper"
-                      targetId={activePaper.id}
-                      defaultTitle={`${activeOlympiad.title} — ${activePaper.tab_label}`}
-                      onRequireAuth={() => setAuthModalOpen(true)}
-                      onClose={() => setOlympiadBoardOpen(false)}
-                    />
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        ) : (
-          /* ================= MODO PROBLEMAS (IRODOV / NOIC) + LOUSA ================= */
-          <div className="space-y-6">
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-              <div className={`${problemBoardOpen ? 'lg:col-span-6' : 'lg:col-span-8'} space-y-6`}>
-                {loadingData ? (
-                  <div className="bg-[#111827] border border-slate-800 rounded-xl p-12 text-center text-slate-400">
-                    Conectando à API e carregando acervo {sourceLabel}...
-                  </div>
-                ) : !selectedProblem ? (
-                  <div className="bg-[#111827] border border-slate-800 rounded-xl p-12 text-center text-slate-400">
-                    {selectedSource === 'noic' ? (
-                      <>
-                        Nenhuma questão encontrada no acervo <strong className="text-indigo-400">NOIC</strong>. Rode o script <code className="text-indigo-400">seed_noic.py</code> para popular este banco.
-                      </>
-                    ) : (
-                      <>
-                        Nenhuma questão encontrada. Execute o arquivo <code className="text-indigo-400">database/schema_neon.sql</code> no SQL Editor do Neon.
-                      </>
-                    )}
-                  </div>
-                ) : activeTab === 'editorial' ? (
-                  <div className="bg-[#111827] border border-slate-800 rounded-xl p-6 space-y-4">
-                    <div className="flex items-center justify-between border-b border-slate-800 pb-4">
-                      <div>
-                        <span className="text-xs font-mono text-indigo-400">Editorial Oficial ({sourceLabel})</span>
-                        <h2 className="text-xl font-bold text-white">
-                          {selectedProblem.irodov_code} — {selectedProblem.title}
-                        </h2>
-                      </div>
-                      <button
-                        onClick={() => setActiveTab('problem')}
-                        className="text-sm text-indigo-400 hover:underline"
-                      >
-                        Voltar ao problema
-                      </button>
-                    </div>
-
-                    {editorialContent ? (
-                      <div className="prose prose-invert max-w-none">
-                        <MathText content={editorialContent} />
-                      </div>
-                    ) : (
-                      <div className="p-6 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-200 text-sm flex items-start gap-3">
-                        <AlertCircle className="w-5 h-5 shrink-0 mt-0.5 text-amber-400" />
-                        <div>
-                          <p className="font-semibold">Editorial bloqueado</p>
-                          <p className="text-amber-200/80 mt-1">
-                            {editorialError || 'Resolva o problema primeiro para desbloquear a solução comentada.'}
-                          </p>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                ) : (
-                  <>
-                    <div className="bg-[#111827] border border-slate-800 rounded-xl p-6 space-y-5">
-                      <div className="flex flex-wrap items-start justify-between gap-4 border-b border-slate-800 pb-4">
-                        <div>
-                          <div className="flex items-center gap-2 text-xs font-mono text-slate-400 mb-1">
-                            <span
-                              className={`px-2 py-0.5 rounded ${
-                                currentProblemIsUnrated
-                                  ? 'bg-amber-500/15 text-amber-300 border border-amber-500/30'
-                                  : selectedProblem.source === 'noic'
-                                  ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30'
-                                  : 'bg-slate-800 text-indigo-300'
-                              }`}
-                            >
-                              {currentProblemIsUnrated ? selectedProblem.irodov_code : `${sourceLabel} ${selectedProblem.irodov_code}`}
-                            </span>
-                            <span>•</span>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setActiveTag(selectedProblem.category);
-                                setActiveTab('tags');
-                              }}
-                              className="hover:text-indigo-400 transition"
-                              title="Filtrar mais questões desta área"
-                            >
-                              {selectedProblem.category}
-                              {selectedProblem.raw_category &&
-                                selectedProblem.raw_category.trim().toLowerCase() !==
-                                  selectedProblem.category.trim().toLowerCase() && (
-                                  <span className="text-slate-500"> · {selectedProblem.raw_category}</span>
-                                )}
-                            </button>
-                          </div>
-                          <h1 className="text-2xl font-bold text-white">{selectedProblem.title}</h1>
-                        </div>
-
-                        <div className="flex flex-wrap items-center gap-2">
-                          <button
-                            type="button"
-                            onClick={() => setProblemBoardOpen((prev) => !prev)}
-                            className={`px-3 py-1.5 rounded-md text-xs font-semibold transition flex items-center gap-1.5 border ${
-                              problemBoardOpen
-                                ? 'bg-indigo-600 text-white border-indigo-500'
-                                : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border-slate-700'
-                            }`}
-                          >
-                            <PenTool className="w-3.5 h-3.5" />
-                            {problemBoardOpen ? 'Fechar Lousa' : 'Abrir Lousa'}
-                          </button>
-
-                          {solvedProblemIds.has(selectedProblem.id) && (
-                            <span className="flex items-center gap-1 px-2.5 py-1 rounded-md bg-emerald-500/15 text-emerald-400 text-xs font-semibold border border-emerald-500/30">
-                              <CheckCircle2 className="w-3.5 h-3.5" /> Resolvido
-                            </span>
-                          )}
-                          <span className="px-3 py-1 rounded-md bg-slate-800 text-xs font-mono text-slate-300 border border-slate-700">
-                            {currentProblemIsUnrated ? (
-                              <>
-                                <strong className="text-amber-400">*{selectedProblem.difficulty_rating}</strong>{' '}
-                                <span className="text-slate-400">(Unrated)</span>
-                              </>
-                            ) : (
-                              <>
-                                Rating: <strong className="text-amber-400">*{selectedProblem.difficulty_rating}</strong>
-                              </>
-                            )}
-                          </span>
-                        </div>
-                      </div>
-
-                      <div className="text-base">
-                        <MathText content={selectedProblem.statement_latex} />
-                      </div>
-
-                      {selectedProblem.figure_url && (
-                        <div className="my-4 flex justify-center rounded-xl border border-slate-800/80 bg-[#0b0f19] p-4">
-                          <img
-                            src={selectedProblem.figure_url}
-                            alt={`Figura da questão ${selectedProblem.irodov_code}`}
-                            className="max-h-72 w-auto object-contain invert mix-blend-screen contrast-125"
-                          />
-                        </div>
-                      )}
-
-                      {selectedProblem.svg_diagram && (
-                        <div
-                          className="p-4 rounded-lg bg-[#0b0f19] border border-slate-800 flex justify-center"
-                          dangerouslySetInnerHTML={{ __html: selectedProblem.svg_diagram }}
-                        />
-                      )}
-
-                      <div className="p-3.5 rounded-lg bg-slate-900/90 border border-slate-800 text-xs text-slate-300 flex items-center justify-between gap-4">
-                        <div>
-                          <span className="font-semibold text-indigo-400">Formato esperado: </span>
-                          {selectedProblem.answer_type === 'self_graded'
-                            ? 'Demonstração / Gráfico / Discursiva (Autoavaliação — Unrated)'
-                            : selectedProblem.answer_type === 'algebraic'
-                            ? `Expressão simbólica (${selectedProblem.variables_hint || 'use g, m, R, v_0, alpha...'})`
-                            : `Valor numérico ${selectedProblem.unit ? `em [${selectedProblem.unit}]` : ''}`}
-                        </div>
-                        <span className="font-mono text-slate-500 shrink-0">
-                          Motor: {selectedProblem.answer_type === 'self_graded' ? 'Autoavaliação' : 'SymPy'}
-                        </span>
-                      </div>
-                    </div>
-
-                    {selectedProblem.answer_type === 'self_graded' ? (
-                      <div className="bg-[#111827] border border-slate-800 rounded-xl p-6 space-y-5">
-                        <div className="flex items-center justify-between">
-                          <div className="text-sm font-semibold text-slate-200 flex items-center gap-2">
-                            <BookOpen className="w-4 h-4 text-amber-400" />
-                            Autoavaliação (Discursiva / Demonstração)
-                          </div>
-                          <span className="px-2 py-0.5 rounded text-[11px] font-mono bg-amber-500/15 text-amber-300 border border-amber-500/30">
-                            UNRATED
-                          </span>
-                        </div>
-
-                        {selfGradeEditorial === null ? (
-                          <div className="space-y-3">
-                            <p className="text-xs text-slate-400">
-                              Resolva este item no papel ou na Lousa ao lado. Quando terminar, revele a solução oficial para se autoavaliar.
-                            </p>
-                            {selfGradeError && (
-                              <div className="p-3 rounded-lg bg-rose-500/10 border border-rose-500/30 text-xs text-rose-300">
-                                {selfGradeError}
-                              </div>
-                            )}
-                            <button
-                              type="button"
-                              onClick={handleRevealSelfGradeSolution}
-                              disabled={selfGradeLoading}
-                              className="w-full py-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-sm font-semibold text-white transition flex items-center justify-center gap-2"
-                            >
-                              <BookOpen className="w-4 h-4" />
-                              {selfGradeLoading ? 'Carregando solução...' : 'Revelar Solução Oficial e Autoavaliar'}
-                            </button>
-                          </div>
-                        ) : (
-                          <div className="space-y-4">
-                            <div className="p-4 rounded-lg bg-[#0b0f19] border border-slate-800 space-y-2">
-                              <div className="text-xs font-mono uppercase text-indigo-400">Solução Oficial</div>
-                              <div className="prose prose-invert max-w-none text-sm">
-                                <MathText content={selfGradeEditorial} />
-                              </div>
-                            </div>
-
-                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                              <button
-                                type="button"
-                                disabled={submitting}
-                                onClick={() => handleSelfGradeSubmit('AC')}
-                                className="py-2.5 px-4 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-sm font-semibold text-white transition flex items-center justify-center gap-2"
-                              >
-                                <CheckCircle2 className="w-4 h-4" />
-                                Acertei (Marcar AC)
-                              </button>
-                              <button
-                                type="button"
-                                disabled={submitting}
-                                onClick={() => handleSelfGradeSubmit('WA')}
-                                className="py-2.5 px-4 rounded-lg bg-rose-600/80 hover:bg-rose-600 disabled:opacity-50 text-sm font-semibold text-white transition flex items-center justify-center gap-2"
-                              >
-                                <XCircle className="w-4 h-4" />
-                                Errei / Revisar (Marcar WA)
-                              </button>
-                            </div>
-                          </div>
-                        )}
-
-                        {lastFeedback && (
-                          <div
-                            className={`p-4 rounded-lg border flex items-center justify-between text-sm ${
-                              lastFeedback.verdict === 'AC'
-                                ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
-                                : 'bg-rose-500/10 border-rose-500/30 text-rose-300'
-                            }`}
-                          >
-                            <div className="flex items-center gap-2.5">
-                              {lastFeedback.verdict === 'AC' ? (
-                                <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0" />
-                              ) : (
-                                <XCircle className="w-5 h-5 text-rose-400 shrink-0" />
-                              )}
-                              <span>{lastFeedback.message}</span>
-                            </div>
-                            <span className="font-mono text-xs text-slate-400">Unrated</span>
-                          </div>
-                        )}
-                      </div>
-                    ) : (
-                      <form
-                        onSubmit={handleSubmitSolution}
-                        className="bg-[#111827] border border-slate-800 rounded-xl p-6 space-y-4"
-                      >
-                        <div className="flex items-center justify-between">
-                          <label className="text-sm font-semibold text-slate-200 flex items-center gap-2">
-                            <Code2 className="w-4 h-4 text-indigo-400" />
-                            Sua Resposta ({selectedProblem.answer_type === 'algebraic' ? 'Algébrica' : 'Numérica'})
-                          </label>
-                          <span className="text-xs text-slate-500">
-                            {selectedProblem.answer_type === 'algebraic'
-                              ? 'Ex: sqrt(2*g*h) ou 2*R/3'
-                              : 'Ex: 0.1, 10 cm/s ou 0.36 km/h'}
-                          </span>
-                        </div>
-
-                        <input
-                          type="text"
-                          value={answerInput}
-                          onChange={(e) => setAnswerInput(e.target.value)}
-                          placeholder={
-                            selectedProblem.answer_type === 'algebraic'
-                              ? 'Digite a expressão em sintaxe Python/SymPy...'
-                              : 'Digite o valor com ou sem unidade (ex: 0.1, 10 cm/s ou 0.36 km/h)...'
-                          }
-                          className="w-full px-4 py-3 rounded-lg bg-[#0b0f19] border border-slate-700 focus:border-indigo-500 focus:outline-none font-mono text-sm text-white"
-                        />
-
-                        {answerInput.trim() && (
-                          <div className="p-3 rounded-lg bg-[#0b0f19]/80 border border-slate-800 flex items-center justify-between">
-                            <span className="text-xs text-slate-500">Preview matemático:</span>
-                            <div className="text-indigo-300">
-                              <InlineMath math={toPreviewLatex(answerInput)} />
-                            </div>
-                          </div>
-                        )}
-
-                        {lastFeedback && (
-                          <div
-                            className={`p-4 rounded-lg border flex items-center justify-between text-sm ${
-                              lastFeedback.verdict === 'AC'
-                                ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
-                                : 'bg-rose-500/10 border-rose-500/30 text-rose-300'
-                            }`}
-                          >
-                            <div className="flex items-center gap-2.5">
-                              {lastFeedback.verdict === 'AC' ? (
-                                <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0" />
-                              ) : (
-                                <XCircle className="w-5 h-5 text-rose-400 shrink-0" />
-                              )}
-                              <span>{lastFeedback.message}</span>
-                            </div>
-                            {lastFeedback.unrated ? (
-                              <span className="font-mono text-xs text-slate-400">Unrated</span>
-                            ) : (
-                              typeof lastFeedback.ratingDelta === 'number' &&
-                              lastFeedback.ratingDelta !== 0 && (
-                                <span className="font-mono font-bold">
-                                  {lastFeedback.ratingDelta > 0
-                                    ? `+${lastFeedback.ratingDelta}`
-                                    : lastFeedback.ratingDelta}{' '}
-                                  Elo
-                                </span>
-                              )
-                            )}
-                          </div>
-                        )}
-
-                        <div className="flex items-center justify-between pt-2">
-                          <button
-                            type="button"
-                            onClick={openEditorialTab}
-                            className="text-xs text-slate-400 hover:text-indigo-400 flex items-center gap-1.5 transition"
-                          >
-                            <BookOpen className="w-4 h-4" /> Ver Editorial
-                          </button>
-
-                          <button
-                            type="submit"
-                            disabled={submitting || !answerInput.trim()}
-                            className="flex items-center gap-2 px-5 py-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-sm font-semibold text-white transition"
-                          >
-                            <Send className="w-4 h-4" />
-                            {submitting ? 'Julgando...' : 'Submeter Solução'}
-                          </button>
-                        </div>
-                      </form>
-                    )}
-                  </>
-                )}
-              </div>
-
-              {problemBoardOpen && selectedProblem ? (
-                <div className="lg:col-span-6 space-y-6">
+                }
+                right={
                   <SolutionWhiteboard
                     apiUrl={API_URL}
                     token={token}
-                    targetType="problem"
-                    targetId={selectedProblem.id}
-                    defaultTitle={`${sourceLabel} ${selectedProblem.irodov_code} — ${selectedProblem.title}`}
+                    targetType="olympiad_paper"
+                    targetId={activePaper.id}
+                    defaultTitle={`${activeOlympiad.title} — ${activePaper.tab_label}`}
+                    fillHeight
                     onRequireAuth={() => setAuthModalOpen(true)}
-                    onClose={() => setProblemBoardOpen(false)}
+                    onClose={() => setOlympiadBoardOpen(false)}
                   />
-                </div>
-              ) : (
-                <div className="lg:col-span-4 space-y-6">
-                  <div className="bg-[#111827] border border-slate-800 rounded-xl overflow-hidden">
-                    <div className="p-2 bg-slate-900/80 border-b border-slate-800 grid grid-cols-2 gap-1.5">
-                      <button
-                        type="button"
-                        onClick={() => setSelectedSource('irodov')}
-                        className={`py-1.5 px-3 rounded-lg text-xs font-semibold transition ${
-                          selectedSource === 'irodov'
-                            ? 'bg-indigo-600 text-white shadow'
-                            : 'text-slate-400 hover:text-white hover:bg-slate-800'
-                        }`}
-                      >
-                        Acervo Irodov
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setSelectedSource('noic')}
-                        className={`py-1.5 px-3 rounded-lg text-xs font-semibold transition ${
-                          selectedSource === 'noic'
-                            ? 'bg-emerald-600 text-white shadow'
-                            : 'text-slate-400 hover:text-white hover:bg-slate-800'
-                        }`}
-                      >
-                        Acervo NOIC
-                      </button>
-                    </div>
-
-                    <div className="px-4 py-3 border-b border-slate-800 flex items-center justify-between gap-2">
-                      <span className="text-sm font-bold text-white flex items-center gap-2 truncate">
-                        <BarChart3
-                          className={`w-4 h-4 shrink-0 ${
-                            selectedSource === 'noic' ? 'text-emerald-400' : 'text-indigo-400'
-                          }`}
-                        />
-                        <span className="truncate">Acervo {selectedSource === 'noic' ? 'NOIC' : 'Irodov'}</span>
-                      </span>
-                      <span className="text-xs text-slate-400 shrink-0">{problems.length} itens</span>
-                    </div>
-                    <div className="divide-y divide-slate-800/70 max-h-80 overflow-y-auto">
-                      {problems.map((prob) => {
-                        const isSelected = selectedProblem?.id === prob.id;
-                        const isSolved = solvedProblemIds.has(prob.id);
-                        return (
-                          <button
-                            key={prob.id}
-                            onClick={() => {
-                              setSelectedProblem(prob);
-                              setActiveTab('problem');
-                              setLastFeedback(null);
-                            }}
-                            className={`w-full px-4 py-3 text-left flex items-center justify-between transition ${
-                              isSelected
-                                ? selectedSource === 'noic'
-                                  ? 'bg-emerald-600/15'
-                                  : 'bg-indigo-600/15'
-                                : 'hover:bg-slate-800/40'
-                            }`}
-                          >
-                            <div className="flex items-center gap-2.5 min-w-0">
-                              {isSolved ? (
-                                <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-                              ) : (
-                                <div className="w-4 h-4 rounded-full border border-slate-600 shrink-0" />
-                              )}
-                              <div className="truncate">
-                                <div
-                                  className={`text-xs font-mono ${
-                                    selectedSource === 'noic' ? 'text-emerald-400' : 'text-indigo-400'
-                                  }`}
-                                >
-                                  {prob.irodov_code}
-                                </div>
-                                <div className="text-sm font-medium text-slate-200 truncate">{prob.title}</div>
-                              </div>
-                            </div>
-                            <span className="text-xs font-mono text-slate-400 ml-2">*{prob.difficulty_rating}</span>
-                          </button>
-                        );
-                      })}
-                    </div>
+                }
+              />
+            ) : (
+              <div className="bg-[#111827] border border-slate-800 rounded-xl overflow-hidden">
+                <div className="px-4 py-3 border-b border-slate-800 bg-slate-900/60 flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="px-2 py-0.5 rounded text-xs font-mono font-bold bg-indigo-500/15 text-indigo-300 border border-indigo-500/30 shrink-0">
+                      {activePaper.tab_label}
+                    </span>
+                    {activePaper.title && (
+                      <span className="text-sm font-semibold text-white truncate">{activePaper.title}</span>
+                    )}
                   </div>
 
-                  <div className="bg-[#111827] border border-slate-800 rounded-xl overflow-hidden">
-                    <div className="px-4 py-3 border-b border-slate-800 flex items-center justify-between">
-                      <span className="text-sm font-bold text-white flex items-center gap-2">
-                        <Clock className="w-4 h-4 text-indigo-400" />
-                        Suas Submissões
-                      </span>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div className="inline-flex rounded-lg bg-[#0b0f19] p-1 border border-slate-800">
+                      <button
+                        type="button"
+                        onClick={() => setPaperViewMode('exam')}
+                        className={`px-2.5 py-1 rounded-md text-xs font-semibold transition flex items-center gap-1 ${
+                          paperViewMode === 'exam'
+                            ? 'bg-indigo-600 text-white'
+                            : 'text-slate-400 hover:text-white'
+                        }`}
+                      >
+                        <FileText className="w-3.5 h-3.5" /> Enunciado
+                      </button>
+                      <button
+                        type="button"
+                        disabled={!activePaper.solution_pdf_url}
+                        onClick={() => setPaperViewMode('solution')}
+                        className={`px-2.5 py-1 rounded-md text-xs font-semibold transition flex items-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed ${
+                          paperViewMode === 'solution'
+                            ? 'bg-emerald-600 text-white'
+                            : 'text-slate-400 hover:text-white'
+                        }`}
+                      >
+                        <BookOpen className="w-3.5 h-3.5" /> Solução
+                      </button>
                     </div>
-                    {!user ? (
-                      <div className="p-6 text-center text-xs text-slate-400">
-                        Faça login para registrar seu histórico e evoluir seu rating.
-                      </div>
-                    ) : submissions.length === 0 ? (
-                      <div className="p-6 text-center text-xs text-slate-400">
-                        Nenhuma submissão enviada ainda.
-                      </div>
-                    ) : (
-                      <div className="divide-y divide-slate-800/70 max-h-64 overflow-y-auto text-xs">
-                        {submissions.map((sub) => (
-                          <div key={sub.id} className="px-4 py-2.5 flex items-center justify-between">
-                            <span className="font-mono text-slate-300 truncate max-w-[180px]">
-                              {sub.submitted_answer}
-                            </span>
-                            <span
-                              className={`px-2 py-0.5 rounded font-mono font-bold ${
-                                sub.verdict === 'AC'
-                                  ? 'bg-emerald-500/20 text-emerald-400'
-                                  : 'bg-rose-500/20 text-rose-400'
-                              }`}
-                            >
-                              {sub.verdict}
-                            </span>
-                          </div>
-                        ))}
-                      </div>
+
+                    <div className="flex items-center gap-1.5 bg-[#0b0f19] border border-slate-800 rounded-lg px-2 py-1">
+                      <label className="text-[11px] text-slate-400 whitespace-nowrap">Nota:</label>
+                      <input
+                        type="number"
+                        min={0}
+                        max={10}
+                        step={0.5}
+                        value={paperScores[activePaper.id] ?? ''}
+                        onChange={(e) => updatePaperScore(activePaper.id, e.target.value)}
+                        placeholder="0–10"
+                        className="w-12 bg-transparent text-xs font-mono text-emerald-300 focus:outline-none text-right"
+                      />
+                      <span className="text-[11px] font-mono text-slate-500">/10</span>
+                    </div>
+
+                    {activeRawPdfUrl && (
+                      <a
+                        href={activeRawPdfUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-medium text-slate-200 transition flex items-center gap-1"
+                      >
+                        <ExternalLink className="w-3.5 h-3.5" /> Nova aba
+                      </a>
                     )}
                   </div>
                 </div>
-              )}
+
+                <div className="bg-[#0b0f19] p-2 sm:p-3">
+                  <iframe
+                    key={`${activePaper.id}-${paperViewMode}`}
+                    src={buildPdfViewerUrl(activeRawPdfUrl)}
+                    title={`${activeOlympiad.title} — ${activePaper.tab_label} (${
+                      paperViewMode === 'solution' ? 'Solução' : 'Enunciado'
+                    })`}
+                    className="w-full h-[78vh] min-h-[580px] rounded-lg border border-slate-800 bg-slate-950"
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+        ) : problemBoardOpen && selectedProblem ? (
+          /* ================= MODO PROBLEMAS (IRODOV / NOIC) — SPLIT-SCREEN ARRASTÁVEL ================= */
+          <ResizableSplitWorkspace
+            defaultLeftPercent={36}
+            headerSummary={
+              <span className="text-xs font-mono text-slate-400">
+                {sourceLabel} {selectedProblem.irodov_code} — {selectedProblem.title}
+              </span>
+            }
+            left={problemMainPane}
+            right={
+              <SolutionWhiteboard
+                apiUrl={API_URL}
+                token={token}
+                targetType="problem"
+                targetId={selectedProblem.id}
+                defaultTitle={`${sourceLabel} ${selectedProblem.irodov_code} — ${selectedProblem.title}`}
+                fillHeight
+                onRequireAuth={() => setAuthModalOpen(true)}
+                onClose={() => setProblemBoardOpen(false)}
+              />
+            }
+          />
+        ) : (
+          /* ================= MODO PROBLEMAS (IRODOV / NOIC) — LAYOUT PADRÃO ================= */
+          <div className="space-y-6">
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+              <div className="lg:col-span-8 space-y-6">{problemMainPane}</div>
+
+              <div className="lg:col-span-4 space-y-6">
+                <div className="bg-[#111827] border border-slate-800 rounded-xl overflow-hidden">
+                  <div className="p-2 bg-slate-900/80 border-b border-slate-800 grid grid-cols-2 gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedSource('irodov')}
+                      className={`py-1.5 px-3 rounded-lg text-xs font-semibold transition ${
+                        selectedSource === 'irodov'
+                          ? 'bg-indigo-600 text-white shadow'
+                          : 'text-slate-400 hover:text-white hover:bg-slate-800'
+                      }`}
+                    >
+                      Acervo Irodov
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedSource('noic')}
+                      className={`py-1.5 px-3 rounded-lg text-xs font-semibold transition ${
+                        selectedSource === 'noic'
+                          ? 'bg-emerald-600 text-white shadow'
+                          : 'text-slate-400 hover:text-white hover:bg-slate-800'
+                      }`}
+                    >
+                      Acervo NOIC
+                    </button>
+                  </div>
+
+                  <div className="px-4 py-3 border-b border-slate-800 flex items-center justify-between gap-2">
+                    <span className="text-sm font-bold text-white flex items-center gap-2 truncate">
+                      <BarChart3
+                        className={`w-4 h-4 shrink-0 ${
+                          selectedSource === 'noic' ? 'text-emerald-400' : 'text-indigo-400'
+                        }`}
+                      />
+                      <span className="truncate">Acervo {selectedSource === 'noic' ? 'NOIC' : 'Irodov'}</span>
+                    </span>
+                    <span className="text-xs text-slate-400 shrink-0">{problems.length} itens</span>
+                  </div>
+                  <div className="divide-y divide-slate-800/70 max-h-80 overflow-y-auto">
+                    {problems.map((prob) => {
+                      const isSelected = selectedProblem?.id === prob.id;
+                      const isSolved = solvedProblemIds.has(prob.id);
+                      return (
+                        <button
+                          key={prob.id}
+                          onClick={() => {
+                            setSelectedProblem(prob);
+                            setActiveTab('problem');
+                            setLastFeedback(null);
+                          }}
+                          className={`w-full px-4 py-3 text-left flex items-center justify-between transition ${
+                            isSelected
+                              ? selectedSource === 'noic'
+                                ? 'bg-emerald-600/15'
+                                : 'bg-indigo-600/15'
+                              : 'hover:bg-slate-800/40'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            {isSolved ? (
+                              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                            ) : (
+                              <div className="w-4 h-4 rounded-full border border-slate-600 shrink-0" />
+                            )}
+                            <div className="truncate">
+                              <div
+                                className={`text-xs font-mono ${
+                                  selectedSource === 'noic' ? 'text-emerald-400' : 'text-indigo-400'
+                                }`}
+                              >
+                                {prob.irodov_code}
+                              </div>
+                              <div className="text-sm font-medium text-slate-200 truncate">{prob.title}</div>
+                            </div>
+                          </div>
+                          <span className="text-xs font-mono text-slate-400 ml-2">*{prob.difficulty_rating}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div className="bg-[#111827] border border-slate-800 rounded-xl overflow-hidden">
+                  <div className="px-4 py-3 border-b border-slate-800 flex items-center justify-between">
+                    <span className="text-sm font-bold text-white flex items-center gap-2">
+                      <Clock className="w-4 h-4 text-indigo-400" />
+                      Suas Submissões
+                    </span>
+                  </div>
+                  {!user ? (
+                    <div className="p-6 text-center text-xs text-slate-400">
+                      Faça login para registrar seu histórico e evoluir seu rating.
+                    </div>
+                  ) : submissions.length === 0 ? (
+                    <div className="p-6 text-center text-xs text-slate-400">
+                      Nenhuma submissão enviada ainda.
+                    </div>
+                  ) : (
+                    <div className="divide-y divide-slate-800/70 max-h-64 overflow-y-auto text-xs">
+                      {submissions.map((sub) => (
+                        <div key={sub.id} className="px-4 py-2.5 flex items-center justify-between">
+                          <span className="font-mono text-slate-300 truncate max-w-[180px]">
+                            {sub.submitted_answer}
+                          </span>
+                          <span
+                            className={`px-2 py-0.5 rounded font-mono font-bold ${
+                              sub.verdict === 'AC'
+                                ? 'bg-emerald-500/20 text-emerald-400'
+                                : 'bg-rose-500/20 text-rose-400'
+                            }`}
+                          >
+                            {sub.verdict}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
             </div>
           </div>
         )}
