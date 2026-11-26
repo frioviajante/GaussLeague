@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useMemo } from 'react';
+import dynamic from 'next/dynamic';
 import { InlineMath, BlockMath } from 'react-katex';
 import {
   Trophy,
@@ -26,8 +27,21 @@ import {
   TrendingUp,
   FileText,
   ExternalLink,
+  PenTool,
+  FolderOpen,
+  Plus,
+  Trash2,
 } from 'lucide-react';
 import noicLogo from './noic.png';
+
+const SolutionWhiteboard = dynamic(() => import('./components/SolutionWhiteboard'), {
+  ssr: false,
+  loading: () => (
+    <div className="bg-[#111827] border border-slate-800 rounded-xl h-[78vh] min-h-[580px] flex items-center justify-center text-sm text-slate-400">
+      Inicializando mesa digital (Excalidraw)...
+    </div>
+  ),
+});
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
@@ -120,6 +134,29 @@ interface Submission {
   created_at: string;
 }
 
+interface DriveSolutionItem {
+  id: string;
+  target_type: 'problem' | 'olympiad_paper' | 'scratchpad';
+  target_id: string;
+  title_override?: string | null;
+  element_count: number;
+  has_notes: boolean;
+  has_board: boolean;
+  created_at: string;
+  updated_at: string;
+  problem_code?: string | null;
+  problem_title?: string | null;
+  problem_source?: string | null;
+  problem_rating?: number | null;
+  paper_olympiad_id?: string | null;
+  paper_tab_label?: string | null;
+  paper_title?: string | null;
+  olympiad_competition?: string | null;
+  olympiad_year?: number | null;
+  olympiad_title?: string | null;
+  olympiad_duration?: number | null;
+}
+
 const RATING_PRESETS = [
   { label: 'Qualquer', min: '', max: '' },
   { label: '≤ 1400', min: '', max: '1400' },
@@ -130,7 +167,6 @@ const RATING_PRESETS = [
 ];
 
 const OLYMPIAD_CATALOG = [
-  // Internacionais & Regionais
   {
     code: 'IPhO',
     name: 'International Physics Olympiad',
@@ -197,7 +233,6 @@ const OLYMPIAD_CATALOG = [
     duration: '4h',
     badge: 'text-cyan-400 border-cyan-500/30 bg-cyan-500/10',
   },
-  // Nacionais & Seletivas
   {
     code: 'OBF',
     name: 'Olimpíada Brasileira de Física (3ª Fase N3)',
@@ -258,6 +293,17 @@ const RANK_BANDS = [
   { min: 2400, max: 4000, fill: 'rgba(244, 63, 94, 0.10)', stroke: '#fb7185' },
 ];
 
+function generateUuid(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    const v = c === 'x' ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+}
+
 function getRankInfo(rating: number) {
   if (rating < 1200) return { title: 'Newbie', color: 'text-gray-400', badge: 'bg-gray-500/20 text-gray-300 border-gray-500/30' };
   if (rating < 1400) return { title: 'Pupil', color: 'text-emerald-400', badge: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30' };
@@ -275,7 +321,6 @@ function compareProblemCodes(a: string, b: string): number {
 function buildPdfViewerUrl(rawUrl: string): string {
   const clean = (rawUrl || '').trim();
   if (!clean) return '';
-  // PDFs locais ou já servidos pela própria API abrem direto; links externos passam pelo proxy FastAPI
   if (clean.startsWith('/') || clean.startsWith(API_URL)) {
     return `${clean}#view=FitH`;
   }
@@ -544,7 +589,9 @@ export default function NoicLeaguePage() {
   const [authError, setAuthError] = useState<string | null>(null);
   const [authLoading, setAuthLoading] = useState(false);
 
-  const [activeTab, setActiveTab] = useState<'problem' | 'tags' | 'editorial' | 'standings' | 'olympiads' | 'profile'>('problem');
+  const [activeTab, setActiveTab] = useState<
+    'problem' | 'tags' | 'editorial' | 'standings' | 'olympiads' | 'drive' | 'profile'
+  >('problem');
   const [selectedSource, setSelectedSource] = useState<ProblemSource>('irodov');
   const [problems, setProblems] = useState<Problem[]>([]);
   const [selectedProblem, setSelectedProblem] = useState<Problem | null>(null);
@@ -553,6 +600,15 @@ export default function NoicLeaguePage() {
   const [submissions, setSubmissions] = useState<Submission[]>([]);
   const [leaderboard, setLeaderboard] = useState<UserProfile[]>([]);
   const [loadingData, setLoadingData] = useState(true);
+
+  // Estados da Lousa (Whiteboard) e Meu Drive
+  const [problemBoardOpen, setProblemBoardOpen] = useState(false);
+  const [olympiadBoardOpen, setOlympiadBoardOpen] = useState(false);
+  const [driveItems, setDriveItems] = useState<DriveSolutionItem[]>([]);
+  const [loadingDrive, setLoadingDrive] = useState(false);
+  const [driveFilter, setDriveFilter] = useState<'all' | 'irodov' | 'noic' | 'olympiad_paper' | 'scratchpad'>('all');
+  const [driveSearch, setDriveSearch] = useState('');
+  const [activeScratchpad, setActiveScratchpad] = useState<{ id: string; title: string } | null>(null);
 
   // Estados da aba Tags & Rating
   const [categories, setCategories] = useState<CategoryStat[]>([]);
@@ -611,6 +667,7 @@ export default function NoicLeaguePage() {
       setToken(savedToken);
       fetchMe(savedToken);
       fetchUserSubmissions(savedToken);
+      fetchDriveItems(savedToken);
     }
     fetchLeaderboard();
     fetchOlympiads();
@@ -635,6 +692,12 @@ export default function NoicLeaguePage() {
       });
     }
   }, [activeTab, activeTag, tagSourceFilter, tagSort]);
+
+  useEffect(() => {
+    if (activeTab === 'drive' && token) {
+      fetchDriveItems(token);
+    }
+  }, [activeTab, token]);
 
   useEffect(() => {
     if (!timerRunning || timeLeftSeconds <= 0) return;
@@ -662,6 +725,93 @@ export default function NoicLeaguePage() {
         setToken(null);
       }
     } catch {}
+  }
+
+  async function fetchDriveItems(authToken: string) {
+    setLoadingDrive(true);
+    try {
+      const res = await fetch(`${API_URL}/solutions/me`, {
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+      if (res.ok) {
+        setDriveItems(await res.json());
+      }
+    } catch {
+    } finally {
+      setLoadingDrive(false);
+    }
+  }
+
+  async function deleteDriveItem(item: DriveSolutionItem, e: React.MouseEvent) {
+    e.stopPropagation();
+    if (!token) return;
+    if (!window.confirm('Apagar esta resolução/lousa do seu Drive?')) return;
+
+    try {
+      const res = await fetch(`${API_URL}/solutions/${item.target_type}/${item.target_id}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        setDriveItems((prev) => prev.filter((x) => x.id !== item.id));
+        if (activeScratchpad?.id === item.target_id) {
+          setActiveScratchpad(null);
+        }
+      }
+    } catch {}
+  }
+
+  function createNewScratchpad() {
+    if (!token) {
+      setAuthModalOpen(true);
+      return;
+    }
+    const newId = generateUuid();
+    const label = `Lousa Livre ${new Date().toLocaleDateString('pt-BR')}`;
+    setActiveScratchpad({ id: newId, title: label });
+    setActiveTab('drive');
+  }
+
+  async function openDriveItem(item: DriveSolutionItem) {
+    if (item.target_type === 'scratchpad') {
+      setActiveScratchpad({
+        id: item.target_id,
+        title: item.title_override || 'Lousa Livre',
+      });
+      setActiveTab('drive');
+      return;
+    }
+
+    if (item.target_type === 'olympiad_paper' && item.paper_olympiad_id) {
+      const matched = olympiads.find((o) => o.id === item.paper_olympiad_id) || {
+        id: item.paper_olympiad_id,
+        competition: item.olympiad_competition || 'Olimpíada',
+        year: item.olympiad_year || new Date().getFullYear(),
+        title: item.olympiad_title || `${item.olympiad_competition || 'Olimpíada'} ${item.olympiad_year || ''}`.trim(),
+        duration_minutes: item.olympiad_duration || 300,
+      };
+      setOlympiadBoardOpen(true);
+      await startOlympiadSimulation(matched, item.target_id);
+      return;
+    }
+
+    if (item.target_type === 'problem') {
+      try {
+        const res = await fetch(`${API_URL}/problems/${item.target_id}`);
+        if (res.ok) {
+          const prob: Problem = await res.json();
+          setActiveOlympiad(null);
+          setOlympiadPapers([]);
+          setActivePaperId(null);
+          setTimerRunning(false);
+          setSelectedProblem(prob);
+          setLastFeedback(null);
+          setAnswerInput('');
+          setProblemBoardOpen(true);
+          setActiveTab('problem');
+        }
+      } catch {}
+    }
   }
 
   async function fetchProblems(source: ProblemSource = selectedSource, resetSelection = false) {
@@ -809,7 +959,7 @@ export default function NoicLeaguePage() {
     }
   }
 
-  async function startOlympiadSimulation(oly: Olympiad) {
+  async function startOlympiadSimulation(oly: Olympiad, initialPaperId?: string) {
     setLoadingPapers(true);
     setPapersError(null);
     setActiveOlympiad(oly);
@@ -822,7 +972,6 @@ export default function NoicLeaguePage() {
     setLastFeedback(null);
     setAnswerInput('');
 
-    // Carrega notas salvas localmente para esta edição
     try {
       const savedScores = localStorage.getItem(`noic_oly_scores_${oly.id}`);
       setPaperScores(savedScores ? JSON.parse(savedScores) : {});
@@ -839,7 +988,11 @@ export default function NoicLeaguePage() {
       const rawPapers: OlympiadPaper[] = await res.json();
       const sorted = [...rawPapers].sort((a, b) => a.tab_order - b.tab_order);
       setOlympiadPapers(sorted);
-      setActivePaperId(sorted.length > 0 ? sorted[0].id : null);
+      if (initialPaperId && sorted.some((p) => p.id === initialPaperId)) {
+        setActivePaperId(initialPaperId);
+      } else {
+        setActivePaperId(sorted.length > 0 ? sorted[0].id : null);
+      }
     } catch (err: any) {
       setPapersError(err.message || 'Erro ao carregar os PDFs desta prova.');
     } finally {
@@ -952,6 +1105,7 @@ export default function NoicLeaguePage() {
       setPassword('');
       setUsername('');
       fetchUserSubmissions(data.token);
+      fetchDriveItems(data.token);
     } catch (err: any) {
       setAuthError(err.message);
     } finally {
@@ -964,6 +1118,8 @@ export default function NoicLeaguePage() {
     setToken(null);
     setUser(null);
     setSubmissions([]);
+    setDriveItems([]);
+    setActiveScratchpad(null);
   }
 
   async function handleSubmitSolution(e: React.FormEvent) {
@@ -1114,6 +1270,37 @@ export default function NoicLeaguePage() {
     });
   }, [tagProblems, tagStatusFilter, solvedProblemIds]);
 
+  const filteredDriveItems = useMemo(() => {
+    const q = driveSearch.trim().toLowerCase();
+    return driveItems.filter((item) => {
+      if (driveFilter === 'irodov' && !(item.target_type === 'problem' && item.problem_source !== 'noic')) {
+        return false;
+      }
+      if (driveFilter === 'noic' && !(item.target_type === 'problem' && item.problem_source === 'noic')) {
+        return false;
+      }
+      if (driveFilter === 'olympiad_paper' && item.target_type !== 'olympiad_paper') {
+        return false;
+      }
+      if (driveFilter === 'scratchpad' && item.target_type !== 'scratchpad') {
+        return false;
+      }
+      if (!q) return true;
+      const haystack = [
+        item.title_override,
+        item.problem_code,
+        item.problem_title,
+        item.olympiad_title,
+        item.paper_tab_label,
+        item.paper_title,
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+      return haystack.includes(q);
+    });
+  }, [driveItems, driveFilter, driveSearch]);
+
   const activePaper = useMemo(() => {
     if (!olympiadPapers.length) return null;
     return olympiadPapers.find((p) => p.id === activePaperId) || olympiadPapers[0];
@@ -1152,6 +1339,11 @@ export default function NoicLeaguePage() {
     : selectedSource === 'noic'
     ? 'NOIC'
     : 'Irodov';
+
+  const isWideWorkspace =
+    (activeTab === 'problem' && Boolean(activeOlympiad) && olympiadBoardOpen) ||
+    (activeTab === 'problem' && !activeOlympiad && problemBoardOpen) ||
+    (activeTab === 'drive' && Boolean(activeScratchpad));
 
   return (
     <div className="min-h-screen bg-[#0b0f19] text-slate-100 font-sans">
@@ -1227,6 +1419,18 @@ export default function NoicLeaguePage() {
               >
                 Olimpíadas
               </button>
+              <button
+                onClick={() => {
+                  setActiveTab('drive');
+                  setActiveScratchpad(null);
+                  if (token) fetchDriveItems(token);
+                }}
+                className={`px-3 py-1.5 rounded-md text-sm font-medium whitespace-nowrap transition flex items-center gap-1.5 ${
+                  activeTab === 'drive' ? 'bg-indigo-600/20 text-indigo-300' : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                <FolderOpen className="w-3.5 h-3.5" /> Meu Drive
+              </button>
             </nav>
           </div>
 
@@ -1276,8 +1480,229 @@ export default function NoicLeaguePage() {
         </div>
       </header>
 
-      <main className="max-w-7xl mx-auto px-4 py-6">
-        {activeTab === 'tags' ? (
+      <main className={`${isWideWorkspace ? 'max-w-[1640px]' : 'max-w-7xl'} mx-auto px-4 py-6 transition-all`}>
+        {activeTab === 'drive' ? (
+          /* ================= ABA MEU DRIVE (CADERNO & LOUSAS SALVAS) ================= */
+          <div className="space-y-6">
+            {!user || !token ? (
+              <div className="bg-[#111827] border border-slate-800 rounded-xl p-12 text-center space-y-4">
+                <FolderOpen className="w-10 h-10 text-indigo-400 mx-auto" />
+                <h2 className="text-xl font-bold text-white">Seu Drive de Resoluções & Mesa Digital</h2>
+                <p className="text-sm text-slate-400 max-w-md mx-auto">
+                  Faça login para salvar automaticamente suas lousas do Excalidraw e anotações em LaTeX para cada questão do Irodov, NOIC e Olimpíadas.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAuthMode('login');
+                    setAuthModalOpen(true);
+                  }}
+                  className="px-5 py-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-sm font-semibold text-white transition inline-flex items-center gap-2"
+                >
+                  <LogIn className="w-4 h-4" /> Entrar na minha conta
+                </button>
+              </div>
+            ) : activeScratchpad ? (
+              <div className="space-y-4">
+                <div className="bg-[#111827] border border-slate-800 rounded-xl px-5 py-3.5 flex flex-wrap items-center justify-between gap-3">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveScratchpad(null);
+                      fetchDriveItems(token);
+                    }}
+                    className="flex items-center gap-2 text-sm text-indigo-400 hover:text-indigo-300 font-medium"
+                  >
+                    <ArrowLeft className="w-4 h-4" /> Voltar para Meu Drive
+                  </button>
+                  <span className="text-xs font-mono text-slate-400">
+                    Lousa Livre • Auto-save ativo na sua conta
+                  </span>
+                </div>
+
+                <SolutionWhiteboard
+                  apiUrl={API_URL}
+                  token={token}
+                  targetType="scratchpad"
+                  targetId={activeScratchpad.id}
+                  defaultTitle={activeScratchpad.title}
+                  editableTitle
+                  onRequireAuth={() => setAuthModalOpen(true)}
+                  onSaved={(meta) => {
+                    if (meta.titleOverride) {
+                      setActiveScratchpad((prev) =>
+                        prev ? { ...prev, title: meta.titleOverride } : prev
+                      );
+                    }
+                  }}
+                />
+              </div>
+            ) : (
+              <>
+                <div className="bg-[#111827] border border-slate-800 rounded-xl p-6 space-y-5">
+                  <div className="flex flex-wrap items-center justify-between gap-4">
+                    <div>
+                      <h2 className="text-xl font-bold text-white flex items-center gap-2">
+                        <FolderOpen className="w-5 h-5 text-indigo-400" />
+                        Meu Drive de Resoluções
+                      </h2>
+                      <p className="text-sm text-slate-400 mt-1">
+                        Todas as suas lousas vetoriais e anotações em LaTeX sincronizadas na nuvem.
+                      </p>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => fetchDriveItems(token)}
+                        className="px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs text-slate-200 transition flex items-center gap-1.5"
+                      >
+                        <RefreshCw className={`w-3.5 h-3.5 ${loadingDrive ? 'animate-spin' : ''}`} />
+                        Atualizar
+                      </button>
+                      <button
+                        type="button"
+                        onClick={createNewScratchpad}
+                        className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-xs font-semibold text-white transition flex items-center gap-1.5"
+                      >
+                        <Plus className="w-4 h-4" /> Nova Lousa Livre
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-800 pt-4">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      {[
+                        { key: 'all', label: 'Tudo' },
+                        { key: 'olympiad_paper', label: 'Olimpíadas' },
+                        { key: 'irodov', label: 'Irodov' },
+                        { key: 'noic', label: 'NOIC' },
+                        { key: 'scratchpad', label: 'Lousas Livres' },
+                      ].map((tab) => (
+                        <button
+                          key={tab.key}
+                          type="button"
+                          onClick={() => setDriveFilter(tab.key as any)}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
+                            driveFilter === tab.key
+                              ? 'bg-indigo-600 text-white'
+                              : 'bg-slate-800/80 text-slate-400 hover:text-white'
+                          }`}
+                        >
+                          {tab.label}
+                        </button>
+                      ))}
+                    </div>
+
+                    <div className="relative w-full sm:w-64">
+                      <Search className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
+                      <input
+                        type="text"
+                        value={driveSearch}
+                        onChange={(e) => setDriveSearch(e.target.value)}
+                        placeholder="Buscar no Drive..."
+                        className="w-full pl-9 pr-3 py-1.5 rounded-lg bg-[#0b0f19] border border-slate-700 text-xs text-white focus:border-indigo-500 focus:outline-none"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {loadingDrive ? (
+                  <div className="bg-[#111827] border border-slate-800 rounded-xl p-12 text-center text-sm text-slate-400">
+                    Carregando seu Drive...
+                  </div>
+                ) : filteredDriveItems.length === 0 ? (
+                  <div className="bg-[#111827] border border-slate-800 rounded-xl p-12 text-center space-y-3">
+                    <p className="text-sm text-slate-400">
+                      Nenhuma resolução encontrada nesta pasta ainda.
+                    </p>
+                    <p className="text-xs text-slate-500">
+                      Abra qualquer questão ou PDF de olimpíada e clique em <strong className="text-indigo-400">Abrir Lousa</strong>, ou crie uma Lousa Livre acima.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    {filteredDriveItems.map((item) => {
+                      const isOly = item.target_type === 'olympiad_paper';
+                      const isScratch = item.target_type === 'scratchpad';
+                      const isNoic = item.target_type === 'problem' && item.problem_source === 'noic';
+
+                      const badgeText = isOly
+                        ? `${item.olympiad_competition || 'Olimpíada'} ${item.olympiad_year || ''}`.trim()
+                        : isScratch
+                        ? 'LOUSA LIVRE'
+                        : isNoic
+                        ? `NOIC ${item.problem_code || ''}`.trim()
+                        : `IRODOV ${item.problem_code || ''}`.trim();
+
+                      const badgeClass = isOly
+                        ? 'bg-amber-500/15 text-amber-300 border-amber-500/30'
+                        : isScratch
+                        ? 'bg-purple-500/15 text-purple-300 border-purple-500/30'
+                        : isNoic
+                        ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
+                        : 'bg-indigo-500/15 text-indigo-300 border-indigo-500/30';
+
+                      const displayTitle = isScratch
+                        ? item.title_override || 'Lousa Livre sem título'
+                        : isOly
+                        ? `${item.paper_tab_label || 'Caderno'}${item.paper_title ? ` — ${item.paper_title}` : ''}`
+                        : item.problem_title || item.title_override || 'Questão';
+
+                      return (
+                        <div
+                          key={item.id}
+                          onClick={() => openDriveItem(item)}
+                          className="bg-[#111827] border border-slate-800 hover:border-indigo-500/50 rounded-xl p-5 flex flex-col justify-between gap-4 cursor-pointer transition group"
+                        >
+                          <div className="space-y-2.5">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className={`px-2 py-0.5 rounded text-[11px] font-mono font-bold border ${badgeClass}`}>
+                                {badgeText}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={(e) => deleteDriveItem(item, e)}
+                                className="p-1.5 rounded-md text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 transition"
+                                title="Apagar do Drive"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+
+                            <h3 className="font-bold text-white text-sm group-hover:text-indigo-300 transition line-clamp-2">
+                              {displayTitle}
+                            </h3>
+
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              {item.has_board && (
+                                <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-slate-800 text-slate-300 border border-slate-700">
+                                  Lousa ({item.element_count} elem.)
+                                </span>
+                              )}
+                              {item.has_notes && (
+                                <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-slate-800 text-indigo-300 border border-slate-700">
+                                  Notas LaTeX
+                                </span>
+                              )}
+                            </div>
+                          </div>
+
+                          <div className="flex items-center justify-between pt-3 border-t border-slate-800/80 text-[11px] text-slate-500">
+                            <span className="font-mono">{formatFullDate(item.updated_at)}</span>
+                            <span className="text-indigo-400 font-semibold group-hover:underline">
+                              Abrir →
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        ) : activeTab === 'tags' ? (
           <div className="space-y-6">
             <div className="bg-[#111827] border border-slate-800 rounded-xl p-6 space-y-5">
               <div className="flex flex-wrap items-center justify-between gap-4">
@@ -1395,7 +1820,6 @@ export default function NoicLeaguePage() {
                     { key: 'all', label: 'Todas as fontes' },
                     { key: 'irodov', label: 'Irodov' },
                     { key: 'noic', label: 'NOIC' },
-                    { key: 'olympiads', label: 'Olimpíadas' },
                   ].map((opt) => (
                     <button
                       key={opt.key}
@@ -1564,9 +1988,7 @@ export default function NoicLeaguePage() {
                             <td className="py-3 px-4">
                               <span
                                 className={`px-2 py-0.5 rounded text-[11px] font-mono uppercase ${
-                                  prob.olympiad_id
-                                    ? 'bg-amber-500/15 text-amber-300'
-                                    : prob.source === 'noic'
+                                  prob.source === 'noic'
                                     ? 'bg-emerald-500/15 text-emerald-300'
                                     : 'bg-indigo-500/15 text-indigo-300'
                                 }`}
@@ -1780,7 +2202,7 @@ export default function NoicLeaguePage() {
                   </span>
                 </div>
                 <p className="text-sm text-slate-400 mt-1">
-                  Simule provas teóricas originais em PDF organizadas em abas por questão, com cronômetro, gabarito oficial e auto-pontuação.
+                  Simule provas teóricas originais em PDF organizadas em abas por questão, com cronômetro, gabarito oficial e mesa digital integrada.
                 </p>
               </div>
 
@@ -1830,7 +2252,7 @@ export default function NoicLeaguePage() {
                             </span>
                           </div>
                           <h3 className="font-bold text-white text-base">{oly.title}</h3>
-                          <p className="text-xs text-slate-400 mt-1">PDFs originais em abas • Não altera o PhysElo global</p>
+                          <p className="text-xs text-slate-400 mt-1">PDFs originais em abas • Lousa integrada</p>
                         </div>
 
                         <button
@@ -1963,9 +2385,8 @@ export default function NoicLeaguePage() {
             </div>
           </div>
         ) : activeOlympiad ? (
-          /* ================= MODO SIMULADOR DE OLIMPÍADA EM PDF ================= */
+          /* ================= MODO SIMULADOR DE OLIMPÍADA EM PDF + LOUSA ================= */
           <div className="space-y-5">
-            {/* Cabeçalho da prova + Cronômetro */}
             <div className="bg-[#111827] border border-amber-500/30 rounded-xl px-5 py-4 flex flex-wrap items-center justify-between gap-4">
               <div className="flex items-center gap-3">
                 <button
@@ -2002,6 +2423,19 @@ export default function NoicLeaguePage() {
               </div>
 
               <div className="flex items-center gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => setOlympiadBoardOpen((prev) => !prev)}
+                  className={`px-3.5 py-2 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 border ${
+                    olympiadBoardOpen
+                      ? 'bg-indigo-600 text-white border-indigo-500'
+                      : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border-slate-700'
+                  }`}
+                >
+                  <PenTool className="w-3.5 h-3.5" />
+                  {olympiadBoardOpen ? 'Fechar Lousa' : 'Abrir Lousa'}
+                </button>
+
                 <div
                   className={`px-3.5 py-1.5 rounded-lg font-mono text-base font-bold border ${
                     timeLeftSeconds < 600
@@ -2033,7 +2467,6 @@ export default function NoicLeaguePage() {
               </div>
             </div>
 
-            {/* Abas por questão (cada aba = 1 PDF) */}
             {olympiadPapers.length > 0 && (
               <div className="flex flex-wrap items-center gap-2 bg-[#111827] border border-slate-800 rounded-xl p-2.5">
                 {olympiadPapers.map((paper) => {
@@ -2068,7 +2501,6 @@ export default function NoicLeaguePage() {
               </div>
             )}
 
-            {/* Visualizador de PDF */}
             {loadingPapers ? (
               <div className="bg-[#111827] border border-slate-800 rounded-xl p-12 text-center text-slate-400">
                 Carregando PDFs de {activeOlympiad.title}...
@@ -2084,100 +2516,110 @@ export default function NoicLeaguePage() {
                 <code className="text-indigo-400">olympiad_papers</code>.
               </div>
             ) : (
-              <div className="bg-[#111827] border border-slate-800 rounded-xl overflow-hidden">
-                {/* Barra de controles do PDF */}
-                <div className="px-4 py-3 border-b border-slate-800 bg-slate-900/60 flex flex-wrap items-center justify-between gap-3">
-                  <div className="flex items-center gap-2 min-w-0">
-                    <span className="px-2 py-0.5 rounded text-xs font-mono font-bold bg-indigo-500/15 text-indigo-300 border border-indigo-500/30 shrink-0">
-                      {activePaper.tab_label}
-                    </span>
-                    {activePaper.title && (
-                      <span className="text-sm font-semibold text-white truncate">{activePaper.title}</span>
-                    )}
+              <div className={olympiadBoardOpen ? 'grid grid-cols-1 xl:grid-cols-12 gap-5 items-start' : ''}>
+                <div
+                  className={`${
+                    olympiadBoardOpen ? 'xl:col-span-6' : ''
+                  } bg-[#111827] border border-slate-800 rounded-xl overflow-hidden`}
+                >
+                  <div className="px-4 py-3 border-b border-slate-800 bg-slate-900/60 flex flex-wrap items-center justify-between gap-3">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="px-2 py-0.5 rounded text-xs font-mono font-bold bg-indigo-500/15 text-indigo-300 border border-indigo-500/30 shrink-0">
+                        {activePaper.tab_label}
+                      </span>
+                      {activePaper.title && (
+                        <span className="text-sm font-semibold text-white truncate">{activePaper.title}</span>
+                      )}
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-2">
+                      <div className="inline-flex rounded-lg bg-[#0b0f19] p-1 border border-slate-800">
+                        <button
+                          type="button"
+                          onClick={() => setPaperViewMode('exam')}
+                          className={`px-2.5 py-1 rounded-md text-xs font-semibold transition flex items-center gap-1 ${
+                            paperViewMode === 'exam'
+                              ? 'bg-indigo-600 text-white'
+                              : 'text-slate-400 hover:text-white'
+                          }`}
+                        >
+                          <FileText className="w-3.5 h-3.5" /> Enunciado
+                        </button>
+                        <button
+                          type="button"
+                          disabled={!activePaper.solution_pdf_url}
+                          onClick={() => setPaperViewMode('solution')}
+                          className={`px-2.5 py-1 rounded-md text-xs font-semibold transition flex items-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed ${
+                            paperViewMode === 'solution'
+                              ? 'bg-emerald-600 text-white'
+                              : 'text-slate-400 hover:text-white'
+                          }`}
+                        >
+                          <BookOpen className="w-3.5 h-3.5" /> Solução
+                        </button>
+                      </div>
+
+                      <div className="flex items-center gap-1.5 bg-[#0b0f19] border border-slate-800 rounded-lg px-2 py-1">
+                        <label className="text-[11px] text-slate-400 whitespace-nowrap">Nota:</label>
+                        <input
+                          type="number"
+                          min={0}
+                          max={10}
+                          step={0.5}
+                          value={paperScores[activePaper.id] ?? ''}
+                          onChange={(e) => updatePaperScore(activePaper.id, e.target.value)}
+                          placeholder="0–10"
+                          className="w-12 bg-transparent text-xs font-mono text-emerald-300 focus:outline-none text-right"
+                        />
+                        <span className="text-[11px] font-mono text-slate-500">/10</span>
+                      </div>
+
+                      {activeRawPdfUrl && (
+                        <a
+                          href={activeRawPdfUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-medium text-slate-200 transition flex items-center gap-1"
+                        >
+                          <ExternalLink className="w-3.5 h-3.5" /> Nova aba
+                        </a>
+                      )}
+                    </div>
                   </div>
 
-                  <div className="flex flex-wrap items-center gap-2.5">
-                    {/* Toggle Enunciado / Solução Oficial */}
-                    <div className="inline-flex rounded-lg bg-[#0b0f19] p-1 border border-slate-800">
-                      <button
-                        type="button"
-                        onClick={() => setPaperViewMode('exam')}
-                        className={`px-3 py-1 rounded-md text-xs font-semibold transition flex items-center gap-1.5 ${
-                          paperViewMode === 'exam'
-                            ? 'bg-indigo-600 text-white'
-                            : 'text-slate-400 hover:text-white'
-                        }`}
-                      >
-                        <FileText className="w-3.5 h-3.5" /> Enunciado
-                      </button>
-                      <button
-                        type="button"
-                        disabled={!activePaper.solution_pdf_url}
-                        onClick={() => setPaperViewMode('solution')}
-                        className={`px-3 py-1 rounded-md text-xs font-semibold transition flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed ${
-                          paperViewMode === 'solution'
-                            ? 'bg-emerald-600 text-white'
-                            : 'text-slate-400 hover:text-white'
-                        }`}
-                        title={
-                          activePaper.solution_pdf_url
-                            ? 'Revelar solução oficial em PDF'
-                            : 'Solução oficial não disponível para este item'
-                        }
-                      >
-                        <BookOpen className="w-3.5 h-3.5" /> Solução Oficial
-                      </button>
-                    </div>
-
-                    {/* Auto-nota 0 a 10 */}
-                    <div className="flex items-center gap-1.5 bg-[#0b0f19] border border-slate-800 rounded-lg px-2.5 py-1">
-                      <label className="text-[11px] text-slate-400 whitespace-nowrap">Minha nota:</label>
-                      <input
-                        type="number"
-                        min={0}
-                        max={10}
-                        step={0.5}
-                        value={paperScores[activePaper.id] ?? ''}
-                        onChange={(e) => updatePaperScore(activePaper.id, e.target.value)}
-                        placeholder="0–10"
-                        className="w-14 bg-transparent text-xs font-mono text-emerald-300 focus:outline-none text-right"
-                      />
-                      <span className="text-[11px] font-mono text-slate-500">/10</span>
-                    </div>
-
-                    {/* Fallback para mobile / nova aba */}
-                    {activeRawPdfUrl && (
-                      <a
-                        href={activeRawPdfUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-medium text-slate-200 transition flex items-center gap-1.5"
-                      >
-                        <ExternalLink className="w-3.5 h-3.5" /> Nova aba
-                      </a>
-                    )}
+                  <div className="bg-[#0b0f19] p-2 sm:p-3">
+                    <iframe
+                      key={`${activePaper.id}-${paperViewMode}`}
+                      src={buildPdfViewerUrl(activeRawPdfUrl)}
+                      title={`${activeOlympiad.title} — ${activePaper.tab_label} (${
+                        paperViewMode === 'solution' ? 'Solução' : 'Enunciado'
+                      })`}
+                      className="w-full h-[78vh] min-h-[580px] rounded-lg border border-slate-800 bg-slate-950"
+                    />
                   </div>
                 </div>
 
-                {/* Iframe do PDF */}
-                <div className="bg-[#0b0f19] p-2 sm:p-3">
-                  <iframe
-                    key={`${activePaper.id}-${paperViewMode}`}
-                    src={buildPdfViewerUrl(activeRawPdfUrl)}
-                    title={`${activeOlympiad.title} — ${activePaper.tab_label} (${
-                      paperViewMode === 'solution' ? 'Solução' : 'Enunciado'
-                    })`}
-                    className="w-full h-[78vh] min-h-[580px] rounded-lg border border-slate-800 bg-slate-950"
-                  />
-                </div>
+                {olympiadBoardOpen && (
+                  <div className="xl:col-span-6">
+                    <SolutionWhiteboard
+                      apiUrl={API_URL}
+                      token={token}
+                      targetType="olympiad_paper"
+                      targetId={activePaper.id}
+                      defaultTitle={`${activeOlympiad.title} — ${activePaper.tab_label}`}
+                      onRequireAuth={() => setAuthModalOpen(true)}
+                      onClose={() => setOlympiadBoardOpen(false)}
+                    />
+                  </div>
+                )}
               </div>
             )}
           </div>
         ) : (
-          /* ================= MODO PROBLEMAS (IRODOV / NOIC) ================= */
+          /* ================= MODO PROBLEMAS (IRODOV / NOIC) + LOUSA ================= */
           <div className="space-y-6">
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-              <div className="lg:col-span-8 space-y-6">
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+              <div className={`${problemBoardOpen ? 'lg:col-span-6' : 'lg:col-span-8'} space-y-6`}>
                 {loadingData ? (
                   <div className="bg-[#111827] border border-slate-800 rounded-xl p-12 text-center text-slate-400">
                     Conectando à API e carregando acervo {sourceLabel}...
@@ -2265,7 +2707,20 @@ export default function NoicLeaguePage() {
                           <h1 className="text-2xl font-bold text-white">{selectedProblem.title}</h1>
                         </div>
 
-                        <div className="flex items-center gap-2">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setProblemBoardOpen((prev) => !prev)}
+                            className={`px-3 py-1.5 rounded-md text-xs font-semibold transition flex items-center gap-1.5 border ${
+                              problemBoardOpen
+                                ? 'bg-indigo-600 text-white border-indigo-500'
+                                : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border-slate-700'
+                            }`}
+                          >
+                            <PenTool className="w-3.5 h-3.5" />
+                            {problemBoardOpen ? 'Fechar Lousa' : 'Abrir Lousa'}
+                          </button>
+
                           {solvedProblemIds.has(selectedProblem.id) && (
                             <span className="flex items-center gap-1 px-2.5 py-1 rounded-md bg-emerald-500/15 text-emerald-400 text-xs font-semibold border border-emerald-500/30">
                               <CheckCircle2 className="w-3.5 h-3.5" /> Resolvido
@@ -2337,7 +2792,7 @@ export default function NoicLeaguePage() {
                         {selfGradeEditorial === null ? (
                           <div className="space-y-3">
                             <p className="text-xs text-slate-400">
-                              Resolva este item no papel (demonstração, análise qualitativa ou esboço de gráfico). Quando terminar, revele a solução oficial para se autoavaliar.
+                              Resolva este item no papel ou na Lousa ao lado. Quando terminar, revele a solução oficial para se autoavaliar.
                             </p>
                             {selfGradeError && (
                               <div className="p-3 rounded-lg bg-rose-500/10 border border-rose-500/30 text-xs text-rose-300">
@@ -2500,125 +2955,139 @@ export default function NoicLeaguePage() {
                 )}
               </div>
 
-              <div className="lg:col-span-4 space-y-6">
-                <div className="bg-[#111827] border border-slate-800 rounded-xl overflow-hidden">
-                  <div className="p-2 bg-slate-900/80 border-b border-slate-800 grid grid-cols-2 gap-1.5">
-                    <button
-                      type="button"
-                      onClick={() => setSelectedSource('irodov')}
-                      className={`py-1.5 px-3 rounded-lg text-xs font-semibold transition ${
-                        selectedSource === 'irodov'
-                          ? 'bg-indigo-600 text-white shadow'
-                          : 'text-slate-400 hover:text-white hover:bg-slate-800'
-                      }`}
-                    >
-                      Acervo Irodov
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setSelectedSource('noic')}
-                      className={`py-1.5 px-3 rounded-lg text-xs font-semibold transition ${
-                        selectedSource === 'noic'
-                          ? 'bg-emerald-600 text-white shadow'
-                          : 'text-slate-400 hover:text-white hover:bg-slate-800'
-                      }`}
-                    >
-                      Acervo NOIC
-                    </button>
-                  </div>
-
-                  <div className="px-4 py-3 border-b border-slate-800 flex items-center justify-between gap-2">
-                    <span className="text-sm font-bold text-white flex items-center gap-2 truncate">
-                      <BarChart3
-                        className={`w-4 h-4 shrink-0 ${
-                          selectedSource === 'noic' ? 'text-emerald-400' : 'text-indigo-400'
-                        }`}
-                      />
-                      <span className="truncate">Acervo {selectedSource === 'noic' ? 'NOIC' : 'Irodov'}</span>
-                    </span>
-                    <span className="text-xs text-slate-400 shrink-0">{problems.length} itens</span>
-                  </div>
-                  <div className="divide-y divide-slate-800/70 max-h-80 overflow-y-auto">
-                    {problems.map((prob) => {
-                      const isSelected = selectedProblem?.id === prob.id;
-                      const isSolved = solvedProblemIds.has(prob.id);
-                      return (
-                        <button
-                          key={prob.id}
-                          onClick={() => {
-                            setSelectedProblem(prob);
-                            setActiveTab('problem');
-                            setLastFeedback(null);
-                          }}
-                          className={`w-full px-4 py-3 text-left flex items-center justify-between transition ${
-                            isSelected
-                              ? selectedSource === 'noic'
-                                ? 'bg-emerald-600/15'
-                                : 'bg-indigo-600/15'
-                              : 'hover:bg-slate-800/40'
-                          }`}
-                        >
-                          <div className="flex items-center gap-2.5 min-w-0">
-                            {isSolved ? (
-                              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-                            ) : (
-                              <div className="w-4 h-4 rounded-full border border-slate-600 shrink-0" />
-                            )}
-                            <div className="truncate">
-                              <div
-                                className={`text-xs font-mono ${
-                                  selectedSource === 'noic' ? 'text-emerald-400' : 'text-indigo-400'
-                                }`}
-                              >
-                                {prob.irodov_code}
-                              </div>
-                              <div className="text-sm font-medium text-slate-200 truncate">{prob.title}</div>
-                            </div>
-                          </div>
-                          <span className="text-xs font-mono text-slate-400 ml-2">*{prob.difficulty_rating}</span>
-                        </button>
-                      );
-                    })}
-                  </div>
+              {problemBoardOpen && selectedProblem ? (
+                <div className="lg:col-span-6 space-y-6">
+                  <SolutionWhiteboard
+                    apiUrl={API_URL}
+                    token={token}
+                    targetType="problem"
+                    targetId={selectedProblem.id}
+                    defaultTitle={`${sourceLabel} ${selectedProblem.irodov_code} — ${selectedProblem.title}`}
+                    onRequireAuth={() => setAuthModalOpen(true)}
+                    onClose={() => setProblemBoardOpen(false)}
+                  />
                 </div>
+              ) : (
+                <div className="lg:col-span-4 space-y-6">
+                  <div className="bg-[#111827] border border-slate-800 rounded-xl overflow-hidden">
+                    <div className="p-2 bg-slate-900/80 border-b border-slate-800 grid grid-cols-2 gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => setSelectedSource('irodov')}
+                        className={`py-1.5 px-3 rounded-lg text-xs font-semibold transition ${
+                          selectedSource === 'irodov'
+                            ? 'bg-indigo-600 text-white shadow'
+                            : 'text-slate-400 hover:text-white hover:bg-slate-800'
+                        }`}
+                      >
+                        Acervo Irodov
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedSource('noic')}
+                        className={`py-1.5 px-3 rounded-lg text-xs font-semibold transition ${
+                          selectedSource === 'noic'
+                            ? 'bg-emerald-600 text-white shadow'
+                            : 'text-slate-400 hover:text-white hover:bg-slate-800'
+                        }`}
+                      >
+                        Acervo NOIC
+                      </button>
+                    </div>
 
-                <div className="bg-[#111827] border border-slate-800 rounded-xl overflow-hidden">
-                  <div className="px-4 py-3 border-b border-slate-800 flex items-center justify-between">
-                    <span className="text-sm font-bold text-white flex items-center gap-2">
-                      <Clock className="w-4 h-4 text-indigo-400" />
-                      Suas Submissões
-                    </span>
-                  </div>
-                  {!user ? (
-                    <div className="p-6 text-center text-xs text-slate-400">
-                      Faça login para registrar seu histórico e evoluir seu rating.
+                    <div className="px-4 py-3 border-b border-slate-800 flex items-center justify-between gap-2">
+                      <span className="text-sm font-bold text-white flex items-center gap-2 truncate">
+                        <BarChart3
+                          className={`w-4 h-4 shrink-0 ${
+                            selectedSource === 'noic' ? 'text-emerald-400' : 'text-indigo-400'
+                          }`}
+                        />
+                        <span className="truncate">Acervo {selectedSource === 'noic' ? 'NOIC' : 'Irodov'}</span>
+                      </span>
+                      <span className="text-xs text-slate-400 shrink-0">{problems.length} itens</span>
                     </div>
-                  ) : submissions.length === 0 ? (
-                    <div className="p-6 text-center text-xs text-slate-400">
-                      Nenhuma submissão enviada ainda.
-                    </div>
-                  ) : (
-                    <div className="divide-y divide-slate-800/70 max-h-64 overflow-y-auto text-xs">
-                      {submissions.map((sub) => (
-                        <div key={sub.id} className="px-4 py-2.5 flex items-center justify-between">
-                          <span className="font-mono text-slate-300 truncate max-w-[180px]">
-                            {sub.submitted_answer}
-                          </span>
-                          <span
-                            className={`px-2 py-0.5 rounded font-mono font-bold ${
-                              sub.verdict === 'AC'
-                                ? 'bg-emerald-500/20 text-emerald-400'
-                                : 'bg-rose-500/20 text-rose-400'
+                    <div className="divide-y divide-slate-800/70 max-h-80 overflow-y-auto">
+                      {problems.map((prob) => {
+                        const isSelected = selectedProblem?.id === prob.id;
+                        const isSolved = solvedProblemIds.has(prob.id);
+                        return (
+                          <button
+                            key={prob.id}
+                            onClick={() => {
+                              setSelectedProblem(prob);
+                              setActiveTab('problem');
+                              setLastFeedback(null);
+                            }}
+                            className={`w-full px-4 py-3 text-left flex items-center justify-between transition ${
+                              isSelected
+                                ? selectedSource === 'noic'
+                                  ? 'bg-emerald-600/15'
+                                  : 'bg-indigo-600/15'
+                                : 'hover:bg-slate-800/40'
                             }`}
                           >
-                            {sub.verdict}
-                          </span>
-                        </div>
-                      ))}
+                            <div className="flex items-center gap-2.5 min-w-0">
+                              {isSolved ? (
+                                <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                              ) : (
+                                <div className="w-4 h-4 rounded-full border border-slate-600 shrink-0" />
+                              )}
+                              <div className="truncate">
+                                <div
+                                  className={`text-xs font-mono ${
+                                    selectedSource === 'noic' ? 'text-emerald-400' : 'text-indigo-400'
+                                  }`}
+                                >
+                                  {prob.irodov_code}
+                                </div>
+                                <div className="text-sm font-medium text-slate-200 truncate">{prob.title}</div>
+                              </div>
+                            </div>
+                            <span className="text-xs font-mono text-slate-400 ml-2">*{prob.difficulty_rating}</span>
+                          </button>
+                        );
+                      })}
                     </div>
-                  )}
+                  </div>
+
+                  <div className="bg-[#111827] border border-slate-800 rounded-xl overflow-hidden">
+                    <div className="px-4 py-3 border-b border-slate-800 flex items-center justify-between">
+                      <span className="text-sm font-bold text-white flex items-center gap-2">
+                        <Clock className="w-4 h-4 text-indigo-400" />
+                        Suas Submissões
+                      </span>
+                    </div>
+                    {!user ? (
+                      <div className="p-6 text-center text-xs text-slate-400">
+                        Faça login para registrar seu histórico e evoluir seu rating.
+                      </div>
+                    ) : submissions.length === 0 ? (
+                      <div className="p-6 text-center text-xs text-slate-400">
+                        Nenhuma submissão enviada ainda.
+                      </div>
+                    ) : (
+                      <div className="divide-y divide-slate-800/70 max-h-64 overflow-y-auto text-xs">
+                        {submissions.map((sub) => (
+                          <div key={sub.id} className="px-4 py-2.5 flex items-center justify-between">
+                            <span className="font-mono text-slate-300 truncate max-w-[180px]">
+                              {sub.submitted_answer}
+                            </span>
+                            <span
+                              className={`px-2 py-0.5 rounded font-mono font-bold ${
+                                sub.verdict === 'AC'
+                                  ? 'bg-emerald-500/20 text-emerald-400'
+                                  : 'bg-rose-500/20 text-rose-400'
+                              }`}
+                            >
+                              {sub.verdict}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 </div>
-              </div>
+              )}
             </div>
           </div>
         )}
