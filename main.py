@@ -1,6 +1,8 @@
 import os
 import random
 import re
+import json
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Literal, Optional
 from urllib.error import HTTPError, URLError
@@ -834,3 +836,199 @@ def submit_solution(req: SubmissionRequest, user_id: str = Depends(get_current_u
         conn.commit()
 
     return {"verdict": verdict, "new_rating": new_rating, "submission": sub}
+
+MAX_BOARD_BYTES = 5 * 1024 * 1024  # 5 MB por lousa vetorial
+VALID_SOLUTION_TARGETS = ("problem", "olympiad_paper", "scratchpad")
+
+
+class SaveSolutionRequest(BaseModel):
+    title_override: str = ""
+    notes_markdown: str = ""
+    board_json: Optional[dict] = None
+
+
+def _validate_solution_target(target_type: str, target_id: str) -> str:
+    if target_type not in VALID_SOLUTION_TARGETS:
+        raise HTTPException(status_code=400, detail="Tipo de resolução inválido.")
+    try:
+        return str(uuid.UUID(target_id))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="ID de resolução inválido (esperado UUID).")
+
+
+@app.get("/problems/{problem_id}")
+def get_problem_by_id(problem_id: str, conn=Depends(get_db)):
+    cat_expr = normalized_category_sql("category")
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT id, irodov_code, title,
+                   {cat_expr} AS category,
+                   category AS raw_category,
+                   difficulty_rating, statement_latex, svg_diagram, figure_url,
+                   answer_type, unit, variables_hint, source, olympiad_id
+            FROM problems
+            WHERE id = %s
+            """,
+            (problem_id,),
+        )
+        row = cur.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Problema não encontrado.")
+        return row
+
+
+@app.get("/solutions/me")
+def list_my_solutions(user_id: str = Depends(get_current_user_id), conn=Depends(get_db)):
+    """Lista todas as resoluções salvas no Drive pessoal (sem trafegar o board_json pesado)."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT
+                us.id,
+                us.target_type,
+                us.target_id,
+                us.title_override,
+                us.element_count,
+                (COALESCE(TRIM(us.notes_markdown), '') <> '') AS has_notes,
+                (us.board_json IS NOT NULL AND us.element_count > 0) AS has_board,
+                us.created_at,
+                us.updated_at,
+                p.irodov_code AS problem_code,
+                p.title AS problem_title,
+                p.source AS problem_source,
+                p.difficulty_rating AS problem_rating,
+                op.olympiad_id AS paper_olympiad_id,
+                op.tab_label AS paper_tab_label,
+                op.title AS paper_title,
+                o.competition AS olympiad_competition,
+                o.year AS olympiad_year,
+                o.title AS olympiad_title,
+                o.duration_minutes AS olympiad_duration
+            FROM user_solutions us
+            LEFT JOIN problems p
+                ON us.target_type = 'problem' AND p.id = us.target_id
+            LEFT JOIN olympiad_papers op
+                ON us.target_type = 'olympiad_paper' AND op.id = us.target_id
+            LEFT JOIN olympiads o
+                ON o.id = op.olympiad_id
+            WHERE us.user_id = %s
+            ORDER BY us.updated_at DESC
+            LIMIT 250
+            """,
+            (user_id,),
+        )
+        return cur.fetchall()
+
+
+@app.get("/solutions/{target_type}/{target_id}")
+def get_my_solution(
+    target_type: str,
+    target_id: str,
+    user_id: str = Depends(get_current_user_id),
+    conn=Depends(get_db),
+):
+    clean_id = _validate_solution_target(target_type, target_id)
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT id, target_type, target_id, title_override,
+                   notes_markdown, board_json, element_count, updated_at
+            FROM user_solutions
+            WHERE user_id = %s AND target_type = %s AND target_id = %s
+            LIMIT 1
+            """,
+            (user_id, target_type, clean_id),
+        )
+        row = cur.fetchone()
+        if not row:
+            return {
+                "exists": False,
+                "target_type": target_type,
+                "target_id": clean_id,
+                "title_override": "",
+                "notes_markdown": "",
+                "board_json": None,
+                "element_count": 0,
+                "updated_at": None,
+            }
+        return {"exists": True, **row}
+
+
+@app.put("/solutions/{target_type}/{target_id}")
+def save_my_solution(
+    target_type: str,
+    target_id: str,
+    req: SaveSolutionRequest,
+    user_id: str = Depends(get_current_user_id),
+    conn=Depends(get_db),
+):
+    clean_id = _validate_solution_target(target_type, target_id)
+
+    board_str = None
+    element_count = 0
+    if req.board_json is not None:
+        board_str = json.dumps(req.board_json, separators=(",", ":"))
+        if len(board_str.encode("utf-8")) > MAX_BOARD_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail="A lousa excedeu o limite de 5 MB. Evite colar imagens grandes diretamente no canvas.",
+            )
+        raw_elements = req.board_json.get("elements")
+        if isinstance(raw_elements, list):
+            element_count = sum(1 for el in raw_elements if isinstance(el, dict) and not el.get("isDeleted"))
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO user_solutions
+                (user_id, target_type, target_id, title_override, notes_markdown, board_json, element_count, updated_at)
+            VALUES
+                (%s, %s, %s, %s, %s, %s::jsonb, %s, now())
+            ON CONFLICT (user_id, target_type, target_id)
+            DO UPDATE SET
+                title_override = EXCLUDED.title_override,
+                notes_markdown = EXCLUDED.notes_markdown,
+                board_json = EXCLUDED.board_json,
+                element_count = EXCLUDED.element_count,
+                updated_at = now()
+            RETURNING id, target_type, target_id, title_override, element_count, updated_at
+            """,
+            (
+                user_id,
+                target_type,
+                clean_id,
+                req.title_override.strip()[:160],
+                req.notes_markdown,
+                board_str,
+                element_count,
+            ),
+        )
+        saved = cur.fetchone()
+        conn.commit()
+
+    return {"status": "saved", **saved}
+
+
+@app.delete("/solutions/{target_type}/{target_id}")
+def delete_my_solution(
+    target_type: str,
+    target_id: str,
+    user_id: str = Depends(get_current_user_id),
+    conn=Depends(get_db),
+):
+    clean_id = _validate_solution_target(target_type, target_id)
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            DELETE FROM user_solutions
+            WHERE user_id = %s AND target_type = %s AND target_id = %s
+            RETURNING id
+            """,
+            (user_id, target_type, clean_id),
+        )
+        deleted = cur.fetchone()
+        conn.commit()
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Resolução não encontrada no Drive.")
+    return {"status": "deleted", "id": deleted["id"]}
